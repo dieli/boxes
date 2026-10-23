@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import pathlib
 import sys
 
@@ -26,24 +27,60 @@ import numpy as np  # noqa: E402
 from shapely import Polygon, contains_xy  # noqa: E402
 
 import boxes_bridge  # noqa: E402
+from assembly import Part  # noqa: E402
 from placements import PLACEMENTS  # noqa: E402
 
 # Extra argument sets per generator (defaults are always checked).
 CASES: dict[str, list[dict]] = {
+    "TwoPiece": [{"hi": "30"}, {"outside": "1"}, {"play": "0.3"}],
+    "SlidingDrawer": [{"hi": "20"}, {"outside": "1"}, {"play": "0.3"}],
+    "PenHolderBox": [{"bottom_edge": "h"}, {"plate_gap": "40"}],
+    "ElectronicsBox": [{"outsidemounts": "0"}, {"outside": "1"}],
+    "DisplayCase": [{"overhang": "5"}, {"outside": "1"}],
+    "StorageRack": [{"sh": "40:60:30"}, {"bottom_edge": "e"}, {"top_edge": "e"},
+                    {"top_edge": "h"}],
+    "SlantedTray": [{"sx": "30:50:20"}, {"front_height": "0.6"}],
+    "OpenBox": [{"edgetype": "h"}, {"outside": "1"}],
+    "UnevenHeightBox": [{"height0": "30", "height1": "60", "height2": "90", "height3": "40"},
+                        {"add_lid": "0"}, {"lid_height": "10"}, {"bottom_edge": "h"}],
+    "SlidingLidBox": [{"lid_type": "lip"}, {"lid_type": "none"}, {"bottom_edge": "h"},
+                      {"outside": "1"}],
+    "WallRack": [{"sh": "80:120"}, {"side_edges": "h"}, {"outside": "1"}, {"top_edge": "E"}],
+    "CompartmentBox": [{"sx": "30:50:20", "sy": "20:40"}, {"handle": "hole"}, {"handle": "none"},
+                       {"bottom_edge": "F"}],
+    "WallHopper": [{"sx": "40:80:30"}, {"label": "0"}, {"slope_angle": "10", "h": "120"}],
+    "WallConsole": [{"sx": "40:80:30"}, {"top_depth": "30", "bottom_depth": "60"},
+                    {"walltype": "slatwall"}],
+    "WallWrenchHolder": [{"x": "150", "depth": "50"}],
+    "WallPlaneHolder": [{"length": "200", "hold_length": "50"}],
+    "WallTypeTray": [{"sx": "30:50", "sy": "20:40:30"}, {"back_height": "30"},
+                     {"back_height": "30", "all_mounts": "1"}, {"hi": "30"},
+                     {"walltype": "french cleat"}],
+    "StorageShelf": [{"sy": "30:50", "sh": "40:60:30"}, {"bottom_edge": "F", "top_edge": "f"},
+                     {"retainer": "15", "sh": "40:60"}, {"top_edge": "E"}],
+    "Shadowbox": [{"layers": "3"}, {"back_edge": "f"}, {"back_edge": "E"}, {"back_edge": "h"},
+                  {"casejoinery": "0"}],
     "ABox": [{"bottom_edge": "F"}, {"Lid_style": "flat"}, {"Lid_style": "flatbrim"},
              {"Lid_style": "overthetop"}, {"Lid_style": "ontop"}, {"x": "150", "y": "80"}],
     "UniversalBox": [{"top_edge": "f"}, {"top_edge": "F"}, {"top_edge": "E"},
+                     {"top_edge": "L"}, {"top_edge": "i"}, {"top_edge": "k"}, {"top_edge": "v"},
                      {"vertical_edges": "finger holes"}, {"bottom_edge": "h"},
                      {"Lid_style": "flatfang"}, {"Lid_style": "overthetop"}],
     "TypeTray": [{"sx": "30:50:70", "sy": "20:60"}, {"top_edge": "f"}, {"bottom_edge": "e"}],
     "ClosedBox": [{"x": "60", "y": "120", "h": "40"}],
     "CardBox": [{"openingdirection": "right"}, {"sx": "40:65", "add_lidtopper": "1"}],
     "DiceBox": [{"lidheight": "25"}],
+    "BasedBox": [{"top_edge": "f"}, {"top_edge": "E"}, {"Lid_style": "overthetop"}],
+    "DrillBox": [{"bottom_edge": "F"}, {"sh": "5:25:10:20"}, {"Lid_style": "flat"}],
+    "GridfinityDrillBox": [{"sh": "5:10:30"}, {"Lid_style": "ontop"}],
+    "BeeQueenTransportBox": [{"bottom_edge": "F"}, {"sh": "12:30:40"}],
 }
 
 FILL_MIN = 0.9
 OVERLAP_MAX = 0.05
 FINGER_EDGES = set("fFhH")
+# Wall mount joints (b/B fingers, c/C slots) are plain finger joints with the plain wall type.
+WALL_EDGES = set("bBcC")
 
 
 class Solid:
@@ -68,24 +105,40 @@ class Solid:
         return inz & contains_xy(self.poly, local[:, 0], local[:, 1])
 
 
+def segments(rec: dict) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    """(start, direction, length) of each edge, counter-clockwise, in local coordinates."""
+    return [(np.array(p0), np.array(d), length) for p0, d, length in Part(0, rec).segments()]
+
+
 def edge_band(s: Solid, i: int, step: float = 0.25):
-    """Local sample points in the strip of width t outside edge i (corners excluded)."""
-    px, py, t = s.rec["x"], s.rec["y"], s.t
-    length = px if i % 2 == 0 else py
+    """Local sample points in the joint strip of width t along edge i (corners excluded)."""
+    t = s.t
+    segs = segments(s.rec)
+    if i >= len(segs):
+        return None
+    p0, d, length = segs[i]
     # Corners are trimmed by ignore_widths etc.; half-step phase keeps samples off finger boundaries.
     along = np.arange(2 * t + step / 2, length - 2 * t, step)
     if along.size == 0:
         return None
-    d = np.array([0.2, 0.5, 0.8]) * t
-    a, dd = np.meshgrid(along, d)
-    a, dd = a.ravel(), dd.ravel()
-    x, y = {0: (a, -dd), 1: (px + dd, a), 2: (a, py + dd), 3: (-dd, a)}[i]
-    return x, y
+    ccw = sum(q[0] * dq[1] * l - q[1] * dq[0] * l for q, dq, l in segs) > 0  # shoelace
+    out = np.array([d[1], -d[0]]) * (1 if ccw else -1)
+    dist = np.array([0.2, 0.5, 0.8]) * t
+    if s.rec["helper"] == "polygonWall":
+        # Edges are drawn right on the polygon line (not startWidth outside it like in
+        # rectangularWall): F slots go inwards, f fingers outwards.
+        dist = dist - s.rec["edges"][i]["startWidth"]
+    a, dd = np.meshgrid(along, dist)
+    pts = p0 + np.outer(a.ravel(), d) + np.outer(dd.ravel(), out)
+    return pts[:, 0], pts[:, 1]
 
 
 def check(name: str, args: dict) -> list[str]:
-    with contextlib.redirect_stdout(io.StringIO()):
-        r = json.loads(boxes_bridge.render_with_parts(name, json.dumps({"burn": "0", **args})))
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = json.loads(boxes_bridge.render_with_parts(name, json.dumps({"burn": "0", **args})))
+    except Exception as e:
+        return [f"render failed: {type(e).__name__}: {str(e).splitlines()[-1] if str(e) else ''}"]
     problems = []
     if r["assembly"] is not True:
         return [f"assembly: {r['assembly']}"]
@@ -101,7 +154,10 @@ def check(name: str, args: dict) -> list[str]:
             return np.any([b.contains(w) for b in others], axis=0) if others else np.zeros(len(w), bool)
 
         for i, e in enumerate(a.rec["edges"]):
-            if e["char"] not in FINGER_EDGES:
+            # Composite edges (slotted, compound, ...): only check that nothing cuts in.
+            composite = e["char"] is None
+            if not composite and e["char"] not in FINGER_EDGES and not (
+                    e["char"] in WALL_EDGES and args.get("walltype", "plain") == "plain"):
                 continue
             band = edge_band(a, i)
             if band is None:
@@ -112,8 +168,10 @@ def check(name: str, args: dict) -> list[str]:
             gaps, fingers = ~ina, ina
             fill = filled[gaps].mean() if gaps.any() else 1.0
             overlap = filled[fingers].mean() if fingers.any() else 0.0
+            if composite:
+                fill = 1.0
             if fill < FILL_MIN or overlap > OVERLAP_MAX:
-                problems.append(f"{a.name} edge {i} '{e['char']}': fill {fill:.0%}, overlap {overlap:.0%}")
+                problems.append(f"{a.name} edge {i} '{e['char'] or '?'}': fill {fill:.0%}, overlap {overlap:.0%}")
         # Coarse body check: parts cutting into each other.
         minx, miny, maxx, maxy = a.poly.bounds
         step = max(1.0, min(maxx - minx, maxy - miny) / 25)

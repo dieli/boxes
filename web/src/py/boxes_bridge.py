@@ -9,11 +9,12 @@ import argparse
 import html
 import inspect
 import json
+import math
 import re
 import sys
 
 from affine import Affine
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
 import boxes
@@ -166,7 +167,9 @@ def _callers(frame, limit: int = 12) -> list[str]:
     return names
 
 
-def _wrap_wall_helper(helper: str, edges_param: str):
+def _wrap_wall_helper(helper: str, describe):
+    """Records each call of a wall helper. describe(box, args) gives the part's size, edges
+    and where its local frame lies relative to where the helper calls cc(callback, 0)."""
     orig = getattr(boxes.Boxes, helper)
     sig = inspect.signature(orig)
 
@@ -177,15 +180,26 @@ def _wrap_wall_helper(helper: str, edges_param: str):
         bound = sig.bind(self, *args, **kwargs)
         bound.apply_defaults()
         a = bound.arguments
+        try:
+            d = describe(self, a)
+        except Exception:  # unusual arguments: draw it, just don't record it
+            d = None
+        if d is None:
+            return orig(self, *args, **kwargs)
         entry = {
             "helper": helper,
-            "x": a["x"],
-            "y": a["y"],
-            "edges": [_edge_info(self, e) for e in a[edges_param]],
+            "x": d["x"],
+            "y": d["y"],
+            "edges": [_edge_info(self, e) for e in d["edges"]],
             "label": a.get("label") or "",
             "move": a.get("move") or "",
             "callers": _callers(sys._getframe(1)),
+            "params": d.get("params", {}),
+            "_offset": d["offset"],
+            "_probe": d.get("probe", (d["x"] / 2, d["y"] / 2)),
         }
+        for i, char in d.get("chars", {}).items():
+            entry["edges"][i]["char"] = char
         outer, rec.pending = rec.pending, entry
         try:
             return orig(self, *args, **kwargs)
@@ -195,13 +209,104 @@ def _wrap_wall_helper(helper: str, edges_param: str):
     setattr(boxes.Boxes, helper, wrapper)
 
 
+def _edge_objs(box, edges, n: int) -> list:
+    """Edge objects for a helper's edges argument (string, list or single edge), n of them."""
+    if isinstance(edges, str) and len(edges) == 1 or not hasattr(edges, "__getitem__"):
+        edges = [edges]
+    edges = [box.edges.get(e, e) for e in edges]
+    return [edges[i % len(edges)] for i in range(n)]
+
+
+def _rect_like(box, a, x, y, n=4, **extra):
+    """Helpers that start with edge 0 at the origin, like rectangularWall: the cut line of
+    edge 0 lies startWidth below the inner rectangle."""
+    edges = _edge_objs(box, a["edges"], n)
+    return {"x": x, "y": y, "edges": edges, "offset": (0.0, edges[0].startWidth()), **extra}
+
+
+def _describe_rectangular_wall(box, a):
+    return _rect_like(box, a, a["x"], a["y"])
+
+
+def _describe_trapezoid(box, a):
+    # Inner shape: (0,0)-(w,0)-(w,h1)-(0,h0); edge 2 is the slanted top.
+    return _rect_like(box, a, a["w"], max(a["h0"], a["h1"]),
+                      params={"h0": a["h0"], "h1": a["h1"]})
+
+
+def _describe_triangle(box, a):
+    if a["num"] != 1:
+        return None  # several triangles in one part
+    x, y = a["x"], a["y"]
+    edges = [box.edges.get(e, e) for e in a["edges"]]
+    if len(edges) == 2:
+        edges.append(box.edges["e"])
+    # Inner shape: (0,0)-(x,0)-(x,y); edge 2 is the hypotenuse.
+    return {"x": x, "y": y, "edges": edges, "offset": (0.0, edges[0].startWidth()),
+            "probe": (2 * x / 3, y / 3), "params": {"r": a["r"]}}
+
+
+def _describe_flanged(box, a):
+    x, y = a["x"], a["y"]
+    flanges = list(a["flanges"] or []) + [0.0] * 4
+    flanges = flanges[:4]
+    edges = _edge_objs(box, a["edges"], 4)
+    rl = min(a["r"], max(flanges[3], flanges[0]))
+    # Flanged sides with F/h edges become finger holes in the flange.
+    chars = {i: "h" for i in range(4)
+             if flanges[i] and (edges[i] is box.edges["F"] or edges[i] is box.edges["h"])}
+    return {"x": x, "y": y, "edges": edges, "chars": chars, "params": {"flanges": flanges},
+            "offset": (flanges[3] + edges[3].endWidth() - rl, flanges[0] + edges[0].startWidth())}
+
+
+def _describe_rounded_plate(box, a):
+    edge = box.edges.get(a["edge"], a["edge"])
+    # cc(0) is at the start of the straight part of the bottom edge, r in from the corner.
+    return {"x": a["x"], "y": a["y"], "edges": [edge] * 4,
+            "offset": (-a["r"], edge.startWidth()), "params": {"r": a["r"]}}
+
+
+def _poly_bbox(points):
+    xs = [q[0] for q in points]
+    ys = [q[1] for q in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _describe_regular_polygon(box, a):
+    n = a["corners"]
+    _, h, side = box.regularPolygon(n, a["r"], a["h"], a["side"])
+    edges = _edge_objs(box, a["edges"], n)
+    # Inner polygon: side 0 from (0,0) to (side,0), counter-clockwise.
+    pts, px, py, ang = [], 0.0, 0.0, 0.0
+    for _ in range(n):
+        pts.append((px, py))
+        px += side * math.cos(math.radians(ang))
+        py += side * math.sin(math.radians(ang))
+        ang += 360.0 / n
+    minx, miny, maxx, maxy = _poly_bbox(pts)
+    return {"x": maxx - minx, "y": maxy - miny, "edges": edges,
+            "offset": (minx, edges[0].startWidth() + miny),
+            "params": {"corners": n, "side": side, "h": h, "start": [-minx, -miny]}}
+
+
+def _describe_polygon_wall(box, a):
+    borders = box._closePolygon(list(a["borders"]))
+    edges = _edge_objs(box, a["edge"], len(borders) // 2)
+    # Bounding box of the polygon line itself (no edge margins).
+    minx, miny, maxx, maxy = box._polygonWallExtend(borders, [box.edges["e"]])
+    return {"x": maxx - minx, "y": maxy - miny, "edges": edges, "offset": (minx, miny),
+            "probe": None,
+            "params": {"borders": [list(b) if isinstance(b, (tuple, list)) else b for b in borders],
+                       "start": [-minx, -miny]}}
+
+
 _orig_cc = boxes.Boxes.cc
 
 
 def _cc(self, callback, number, *args, **kwargs):
     rec = _recorder
-    # rectangularWall calls cc(callback, 0, ...) at the start of the bottom edge's cut line,
-    # callback or not. render_with_parts() shifts this up to the inner rectangle.
+    # The wall helpers call cc(callback, 0, ...) at the start of the bottom edge's cut line,
+    # callback or not. render_with_parts() shifts this to the local frame ("_offset").
     if rec is not None and rec.pending is not None and number == 0 and "matrix" not in rec.pending:
         rec.pending["matrix"] = tuple(self.ctx._m)[:6]
         rec.pending["_part"] = self.ctx._dwg._p
@@ -220,7 +325,14 @@ def _surface_transform(self, f, m, invert_y=False):
     return _orig_surface_transform(self, f, m, invert_y)
 
 
-_wrap_wall_helper("rectangularWall", "edges")
+_wrap_wall_helper("rectangularWall", _describe_rectangular_wall)
+_wrap_wall_helper("trapezoidWall", _describe_trapezoid)
+_wrap_wall_helper("trapezoidSideWall", _describe_trapezoid)
+_wrap_wall_helper("rectangularTriangle", _describe_triangle)
+_wrap_wall_helper("flangedWall", _describe_flanged)
+_wrap_wall_helper("roundedPlate", _describe_rounded_plate)
+_wrap_wall_helper("regularPolygonWall", _describe_regular_polygon)
+_wrap_wall_helper("polygonWall", _describe_polygon_wall)
 boxes.Boxes.cc = _cc
 Surface.transform = _surface_transform
 
@@ -278,29 +390,40 @@ def _inside(x: float, y: float, ring) -> bool:
     return inside
 
 
-def _outline(part, to_local: Affine) -> dict | None:
-    """Outer contour and holes of a part, or None if its cuts don't form a closed shape."""
+def _outline(part, to_local: Affine, probe=None, min_area: float = 0.0) -> dict | None:
+    """Outer contour and holes of a part, or None if its cuts don't form a closed shape.
+
+    The outer contour is the largest ring around probe (a local point inside the part, to
+    pick the right piece when one SVG part holds several), else the largest ring if its
+    area is at least min_area (e.g. a U-shaped wall whose middle is cut away).
+    """
     lines = _polylines(part, to_local)
-    # Fast path: every cut is a closed ring; the largest is the outline, rings inside it are holes.
+    # Fast path: every cut is a closed ring; rings inside the outline are holes.
     if lines and all(l[0] == l[-1] and len(l) > 3 for l in lines):
         rings = sorted((l[:-1] for l in lines), key=lambda r: abs(_area(r)), reverse=True)
-        outer = rings[0]
+        around = [r for r in rings if _inside(*probe, r)] if probe else []
+        outer = (around or rings)[0]
+        if not around and abs(_area(outer)) < min_area:
+            return None  # only holes: the part's outline was drawn elsewhere
         return {
             "outer": [list(p) for p in outer],
-            "holes": [[list(p) for p in r] for r in rings[1:]
-                      if abs(_area(r)) >= _MIN_HOLE_AREA and _inside(*r[0], outer)],
+            "holes": [[list(p) for p in r] for r in rings
+                      if r is not outer and abs(_area(r)) >= _MIN_HOLE_AREA and _inside(*r[0], outer)],
         }
-    return _outline_shapely(lines)
+    return _outline_shapely(lines, probe, min_area)
 
 
-def _outline_shapely(lines) -> dict | None:
+def _outline_shapely(lines, probe=None, min_area: float = 0.0) -> dict | None:
     """Fallback for cuts split over several open paths: node and polygonize them."""
     lines = [LineString(l) for l in lines]
     faces = list(polygonize(unary_union(lines))) if lines else []
     if not faces:
         return None
     # The polygonizer gives the material face with the inner cuts as interior rings.
-    shape = max(faces, key=lambda f: f.area)
+    around = [f for f in faces if Polygon(f.exterior).contains(Point(probe))] if probe else []
+    shape = max(around or faces, key=lambda f: f.area)
+    if not around and Polygon(shape.exterior).area < min_area:
+        return None
     return {
         "outer": [list(p) for p in shape.exterior.coords[:-1]],
         "holes": [[list(p) for p in ring.coords[:-1]]
@@ -325,7 +448,7 @@ def render_with_parts(name: str, args_json: str) -> str:
     for w in rec.walls:
         part = w.pop("_part")
         drawn = Affine(*w["matrix"])
-        local = drawn * Affine.translation(0, w["edges"][0]["startWidth"])
+        local = drawn * Affine.translation(*w.pop("_offset"))
         sheet = rec.sheet * local if rec.sheet is not None else local
         w["matrix"] = tuple(sheet)[:6]
         w["part"] = rec.surface.parts.index(part)
@@ -333,7 +456,7 @@ def render_with_parts(name: str, args_json: str) -> str:
         # mount it; placements treat that as a reflection in local x, which keeps every edge
         # in its role (a y reflection is the same plus a 180 degree turn).
         w["mirrored"] = drawn.determinant < 0
-        w["outline"] = _outline(part, ~sheet)
+        w["outline"] = _outline(part, ~sheet, w.pop("_probe"), 0.2 * w["x"] * w["y"])
         parts.append(w)
     try:
         placements = assemble(name, box, parts)

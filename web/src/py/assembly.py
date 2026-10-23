@@ -14,6 +14,7 @@ A placement function (see placements.py) gets an Assembly and puts parts into it
 """
 from __future__ import annotations
 
+import math
 from typing import Callable, Iterable
 
 Vec = tuple[float, float, float]
@@ -50,6 +51,55 @@ class Part:
     def __repr__(self) -> str:
         return f"<Part {self.index} {self.label!r} {self.x:g}x{self.y:g} {self.chars}>"
 
+    def segments(self) -> list[tuple[tuple[float, float], tuple[float, float], float]]:
+        """(start, direction, length) of each edge in local coordinates, in drawing order
+        (counter-clockwise). Edges of rectangularWall etc. lie on the inner shape; those of
+        polygonWall on the polygon line itself."""
+        rec = self.rec
+        x, y = self.x, self.y
+        if rec["helper"] == "polygonWall":
+            return _polygon_segments(rec["params"]["borders"], rec["params"]["start"])
+        if rec["helper"] in ("trapezoidWall", "trapezoidSideWall"):
+            corners = [(0, 0), (x, 0), (x, rec["params"]["h1"]), (0, rec["params"]["h0"])]
+        elif rec["helper"] == "rectangularTriangle":
+            corners = [(0, 0), (x, 0), (x, y)]
+        else:
+            corners = [(0, 0), (x, 0), (x, y), (0, y)]
+        out = []
+        for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+            length = math.hypot(bx - ax, by - ay)
+            d = length or 1.0  # e.g. a trapezoid side of height 0
+            out.append(((float(ax), float(ay)), ((bx - ax) / d, (by - ay) / d), length))
+        return out
+
+
+def _polygon_segments(borders, start):
+    """Walks polygonWall borders [length, turn, length, turn, ...]; a turn may be
+    [angle, radius] for a rounded corner."""
+    px, py = float(start[0]), float(start[1])
+    ang = 0.0
+    segs = []
+    for k in range(0, len(borders) - 1, 2):
+        dx, dy = math.cos(ang), math.sin(ang)
+        length = float(borders[k])
+        segs.append(((px, py), (dx, dy), length))
+        px, py = px + dx * length, py + dy * length
+        turn = borders[k + 1]
+        a, r = (turn[0], turn[1]) if isinstance(turn, (list, tuple)) else (turn, 0.0)
+        a = math.radians(a)
+        if r:  # rounded corner: move along the arc around the centre on the inside
+            side = 1 if a > 0 else -1
+            cx, cy = px - dy * r * side, py + dx * r * side
+            vx, vy = px - cx, py - cy
+            px = cx + math.cos(a) * vx - math.sin(a) * vy
+            py = cy + math.sin(a) * vx + math.cos(a) * vy
+        ang += a
+    return segs
+
+
+def _called(part: Part, func: str) -> bool:
+    return any(c == func or c.endswith(func) for c in part.callers)
+
 
 class Parts(list):
     """List of parts with small query helpers. Queries skip parts that are already placed."""
@@ -68,11 +118,13 @@ class Parts(list):
         return self.where(lambda p: not p.label)
 
     def drawn_by(self, func: str) -> "Parts":
-        """Parts drawn (directly or indirectly) by a function, e.g. "_TopEdge.drawLid"."""
-        return self.where(lambda p: func in p.callers)
+        """Parts drawn (directly or indirectly) by a function, e.g. "_TopEdge.drawLid".
+        Also matches subclasses that keep the method name ("BeeQueenTransportBoxLid.__call__"
+        for "Lid.__call__")."""
+        return self.where(lambda p: _called(p, func))
 
     def not_drawn_by(self, *funcs: str) -> "Parts":
-        return self.where(lambda p: not any(f in p.callers for f in funcs))
+        return self.where(lambda p: not any(_called(p, f) for f in funcs))
 
     def edges(self, chars: str) -> "Parts":
         return self.where(lambda p: p.chars == chars)
