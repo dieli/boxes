@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Boxes.py Live</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <aside id="sidebar">
+      <header>
+        <h1>Boxes.py <span>Live</span></h1>
+        <p id="status">Starting…</p>
+      </header>
+      <label class="picker">
+        Generator
+        <select id="generator" disabled></select>
+      </label>
+      <p id="doc"></p>
+      <div class="actions">
+        <button id="download" disabled>Download SVG</button>
+        <button id="reset" class="secondary">Reset to defaults</button>
+      </div>
+      <form id="form" onsubmit="return false"></form>
+    </aside>
+    <main>
+      <div id="toolbar">
+        <button id="zoom-out" title="Zoom out">−</button>
+        <button id="zoom-fit" title="Fit">Fit</button>
+        <button id="zoom-in" title="Zoom in">+</button>
+        <span id="timing"></span>
+      </div>
+      <div id="error" hidden></div>
+      <div id="views">
+        <div id="preview"></div>
+        <section id="panel3d">
+          <div id="canvas3d"></div>
+          <div class="controls3d">
+            <label>Explode <input id="explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
+            <button id="reset-camera" class="secondary" title="Reset camera">Reset view</button>
+          </div>
+          <details id="parts3d" open>
+            <summary>Parts <span id="parts-count"></span></summary>
+            <div class="parts-actions">
+              <button id="show-all" class="secondary">Show all</button>
+              <button id="hide-all" class="secondary">Hide all</button>
+            </div>
+            <ul id="parts-list"></ul>
+          </details>
+          <p id="assembly-error" hidden></p>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
