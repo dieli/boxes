@@ -2,7 +2,7 @@ import "./style.css";
 import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
 import { defaultLayout, mergeLayout, mergePair, mergeSizes, setLayoutSize, splitLayout, splitSizes, toggleLayout } from "./layout";
-import type { ArgValues, Dimension, GeneratorInfo, Handle, Placement, Point2, RecordedPart } from "./protocol";
+import type { ArgValues, Dimension, GeneratorInfo, GridLine, Handle, Placement, Point2, RecordedPart } from "./protocol";
 import type { AssemblyView } from "./view3d";
 
 const DEBOUNCE_MS = 150;
@@ -217,7 +217,8 @@ function applyZoom() {
 
 function getView3d(): Promise<AssemblyView> {
   view3dLoading ??= import("./view3d").then(({ AssemblyView }) => {
-    view3d = new AssemblyView($("canvas3d"), (part) => select(part), setDimension, toggleHandle, changeChain);
+    view3d = new AssemblyView($("canvas3d"), (part) => select(part), setDimension, toggleHandle, changeChain, moveGridLine);
+    view3d.setSnap(Number(snapInput.value));
     view3d.setExplode(Number(explodeInput.value));
     view3d.setDimensionsVisible(showDimsInput.checked);
     return view3d;
@@ -231,6 +232,15 @@ const modeViewBtn = $<HTMLButtonElement>("mode-view");
 const modeEditBtn = $<HTMLButtonElement>("mode-edit");
 const editHint = $("edit-hint");
 const convertBtn = $<HTMLButtonElement>("convert-tray");
+const snapInput = $<HTMLSelectElement>("snap");
+const snapCtl = $("snap-ctl");
+let hasLines = false;
+try {
+  const saved = localStorage.getItem("boxes-live.snap");
+  if (saved && [...snapInput.options].some((o) => o.value === saved)) snapInput.value = saved;
+} catch {
+  // storage unavailable: keep the default
+}
 let editMode = false;
 
 function setEditMode(on: boolean) {
@@ -239,6 +249,7 @@ function setEditMode(on: boolean) {
   modeEditBtn.classList.toggle("active", editMode);
   editHint.hidden = !editMode;
   convertBtn.hidden = !editMode || current !== "TypeTray";
+  snapCtl.hidden = !editMode || !hasLines;
   // Handles sit where the parts are assembled.
   if (editMode) {
     explodeInput.value = "0";
@@ -274,6 +285,20 @@ function changeChain(dim: Dimension, op: "split" | "merge") {
     return;
   }
   form.set(dim.arg, sizes.map((x) => String(Math.round(x * 100) / 100)).join(":"));
+}
+
+/** Inner walls dragged in 3D: the two compartments on either side get the new sizes. */
+function moveGridLine(line: GridLine, values: number[]) {
+  undoSource = `line:${performance.now()}`;
+  if (line.arg === "layout" && line.axis) {
+    let layout: string | null = form.get("layout") ?? "";
+    for (const k of [line.index, line.index + 1]) {
+      if (layout !== null) layout = setLayoutSize(layout, line.axis, k, values[k]);
+    }
+    if (layout !== null) form.set("layout", layout);
+    return;
+  }
+  form.set(line.arg, values.map((x) => String(Math.round(x * 100) / 100)).join(":"));
 }
 
 /** TypeTray -> TrayLayout with the same grid and the settings both share; Back returns. */
@@ -318,6 +343,7 @@ async function update3d(name: string, result: RenderResult) {
   if (none) {
     assemblyErrorEl.hidden = true;
     modeEditBtn.disabled = true;
+    hasLines = false;
     setEditMode(false);
     return;
   }
@@ -328,9 +354,12 @@ async function update3d(name: string, result: RenderResult) {
   view.update(result.parts, placements, result.thickness, fittedFor !== name);
   view.setDimensions(result.dims);
   view.setHandles(result.handles);
+  view.setLines(result.lines);
+  hasLines = result.lines.length > 0;
   modeEditBtn.disabled = !result.handles.length && !result.dims.some((d) => d.index !== null && d.values);
   editHint.textContent = [
     result.handles.length ? "Click a wall piece to remove it, a green ghost to put it back, a floor to toggle it." : "",
+    hasLines ? "Drag an inner wall to move it (Shift: no snapping)." : "",
     "+ / × on a size splits or merges compartments.",
     name === "TypeTray" ? "Single wall pieces: convert to TrayLayout." : "",
   ].filter(Boolean).join(" ");
@@ -481,6 +510,14 @@ undoBtn.addEventListener("click", () => stepUndo(-1));
 modeViewBtn.addEventListener("click", () => setEditMode(false));
 modeEditBtn.addEventListener("click", () => setEditMode(true));
 convertBtn.addEventListener("click", () => void convertToTrayLayout());
+snapInput.addEventListener("change", () => {
+  view3d?.setSnap(Number(snapInput.value));
+  try {
+    localStorage.setItem("boxes-live.snap", snapInput.value);
+  } catch {
+    // storage unavailable: the setting just isn't kept
+  }
+});
 redoBtn.addEventListener("click", () => stepUndo(1));
 window.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;

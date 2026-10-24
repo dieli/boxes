@@ -147,6 +147,7 @@ class Assembly:
         self.placements: dict[int, dict] = {}
         self.dims: list[dict] = []
         self.handles: list[dict] = []
+        self.lines: list[dict] = []
 
     def place(self, part: Part | None, origin: Vec, u: Vec, v: Vec, n: Vec,
               rot: int = 0, flip: bool = False, name: str = "",
@@ -216,6 +217,15 @@ class Assembly:
             return
         self.dims.append({"arg": arg, "index": index, "values": values, "value": float(value),
                           "a": a, "b": b, "out": out, "label": label, "axis": axis})
+
+    def line(self, arg: str, index: int, values: list[float], lo: Vec, hi: Vec, d: Vec,
+             scale: float, label: str | None = None, axis: str | None = None) -> None:
+        """A grid line the 3D editor can drag: the walls between compartments index and
+        index + 1 of list parameter arg (values; see dim() for label and axis) fill lo..hi.
+        Moving them by 1 along d makes compartment index scale larger and the next one smaller."""
+        self.lines.append({"arg": arg, "index": index, "values": [float(v) for v in values],
+                           "min": lo, "max": hi, "dir": d, "scale": scale,
+                           "label": label or arg, "axis": axis})
 
     def handle(self, kind: str, i: int, j: int, on: bool, lo: Vec, hi: Vec) -> None:
         """Something the 3D editor can toggle, e.g. a wall piece ("hwall"/"vwall") or a floor
@@ -335,6 +345,21 @@ class BoxFrame:
                          k if is_list else None, sizes if sizes is not None and is_list else None,
                          f"{label}[{k + 1}]" if label and is_list else label, axis)
             pos += size + t
+
+    def walls(self, arg: str, side: str, starts: list[float], given: list[float],
+              actual: list[float], h: float, label: str | None = None,
+              axis: str | None = None) -> None:
+        """Draggable inner walls h high: starts[k] is where the wall between compartments k and
+        k + 1 begins, along x (side "x", left to right) or y (side "-y", compartments back to
+        front). given: the parameter's sizes, actual: the sizes as built ("outside" scales them)."""
+        t = self.asm.t
+        scale = sum(given) / sum(actual) if sum(actual) else 1.0
+        for k, s in enumerate(starts):
+            if side == "x":
+                lo, hi, d = self.at(s, 0, 0), self.at(s + t, self.y, h), X
+            else:
+                lo, hi, d = self.at(0, s, 0), self.at(self.x, s + t, h), neg(Y)
+            self.asm.line(arg, k, given, lo, hi, d, scale, label, axis)
 
     def sub(self, x0: float, y0: float, z0: float, x: float, y: float, h: float,
             name: str | None = None) -> "BoxFrame":

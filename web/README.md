@@ -97,6 +97,12 @@ npm run build    # static site in web/dist/
   Generators with neither handles nor compartment lists keep Edit disabled.
 - TypeTray's Edit mode has "Convert to TrayLayout": same grid (sx, sy, h, hi) and the shared
   settings, so single wall pieces and floors can be removed. Browser Back returns to the TypeTray.
+- Also in Edit mode, inner walls (TypeTray, TrayLayout) can be dragged: the two compartments on
+  either side change, their sum stays. The walls on that grid line move live in 3D (a tip shows
+  both sizes); Boxes.py re-renders on release. The compartment before the wall snaps to 1 or 5 mm
+  ("Snap", kept in localStorage), Shift drags freely, Esc cancels. A click without moving still
+  toggles a TrayLayout wall piece. The placement map reports the lines with `BoxFrame.walls()`
+  (wall slab, drag direction, and the parameter-per-mm scale that "outside" introduces).
 - `hi` (inner wall height, 0 = same as `h`) has its own dimension on the first inner wall
   (TypeTray, TrayLayout), e.g. for low inserts under a rulebook.
 - Dimension labels that would overlap on screen (narrow compartments) are moved down a row.

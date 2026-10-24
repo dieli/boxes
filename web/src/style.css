@@ -212,6 +212,20 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   text-align: center;
 }
 .controls3d button { padding: 2px 8px; }
+.controls3d [hidden] { display: none; }
+.drag-tip {
+  position: absolute;
+  padding: 1px 6px;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: #2563eb;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.drag-tip[hidden] { display: none; }
 #assembly-error {
   position: absolute;
   bottom: 8px;

@@ -184,6 +184,8 @@ def type_tray(a: Assembly) -> None:
     f = a.frame(x, y, b.h)
     f.dims(x="sx", y="-sy", h="h")
     _inner_height(f, positions(b.sx, t), [y - y0 - t for y0 in positions(b.sy, t)], b.hi)
+    f.walls("sx", "x", positions(b.sx, t), a.arg("sx"), b.sx, b.hi)
+    f.walls("sy", "-y", [y - y0 - t for y0 in positions(b.sy, t)], a.arg("sy"), b.sy, b.hi)
     p = a.parts
     _outer_walls(a, f, {"front": "front", "back": "back", "left side": "left",
                         "right side": "right", "bottom": "bottom"})
@@ -1461,6 +1463,8 @@ def tray_layout(a: Assembly) -> None:
     f.chain("layout", "x", given.x, label="x", axis="x")
     f.chain("layout", "-y", given.y, label="y", axis="y")
     _inner_height(f, xs[1:-1], ys[1:-1], b.hi)
+    f.walls("layout", "x", xs[1:-1], given.x, sx, b.hi, label="x", axis="x")
+    f.walls("layout", "-y", ys[1:-1], given.y, sy, b.hi, label="y", axis="y")
     walls = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.walls"))
     for j in range(ly + 1):
         for start, end in _runs(b.hwalls[j][:lx]):

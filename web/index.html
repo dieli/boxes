@@ -44,6 +44,9 @@
             </div>
             <button id="convert-tray" class="secondary" hidden
               title="Same grid as a TrayLayout, where single wall pieces and floors can be removed (TypeTray-only options like grip holes and labels are not carried over)">Convert to TrayLayout</button>
+            <label id="snap-ctl" hidden title="Dragged walls snap compartment sizes to this step; hold Shift to move freely">
+              Snap <select id="snap"><option value="1">1 mm</option><option value="5">5 mm</option></select>
+            </label>
             <label>Explode <input id="explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
             <label><input id="show-dims" type="checkbox" checked /> Dimensions</label>
             <button id="reset-camera" class="secondary" title="Reset camera">Reset view</button>

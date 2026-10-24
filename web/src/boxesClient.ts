@@ -2,6 +2,7 @@ import type {
   ArgValues,
   AssemblyStatus,
   Dimension,
+  GridLine,
   Handle,
   FromWorker,
   GeneratorGroup,
@@ -23,6 +24,7 @@ export interface RenderResult {
   assembly: AssemblyStatus;
   dims: Dimension[];
   handles: Handle[];
+  lines: GridLine[];
   thickness: number;
   /** Time spent inside Python. */
   ms: number;
@@ -108,8 +110,8 @@ export class BoxesClient {
     if (msg.type === "error") p.reject(new BoxesError(msg.message, msg.detail));
     else if (msg.type === "schema") p.resolve(msg.schema);
     else {
-      const { svg, parts, assembly, dims, handles, thickness, ms } = msg;
-      p.resolve({ svg, parts, assembly, dims, handles, thickness, ms });
+      const { svg, parts, assembly, dims, handles, lines, thickness, ms } = msg;
+      p.resolve({ svg, parts, assembly, dims, handles, lines, thickness, ms });
     }
   }
 

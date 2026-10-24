@@ -542,7 +542,7 @@ def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int]) 
 def render_with_parts(name: str, args_json: str) -> str:
     """Like render(), plus the recorded walls and their 3D placement.
 
-    Returns {"svg", "parts", "assembly", "dims", "handles", "thickness"}: "assembly" is false when the generator has no
+    Returns {"svg", "parts", "assembly", "dims", "handles", "lines", "thickness"}: "assembly" is false when the generator has no
     placement function (2D only), or the error message if placing failed.
     """
     global _recorder
@@ -592,13 +592,14 @@ def render_with_parts(name: str, args_json: str) -> str:
     parts += _unrecorded(rec, wall_parts, consumed)
     try:
         asm = assemble(name, box, parts)
-        placements, dims, handles = (asm.placements, asm.dims, asm.handles) if asm else (None, [], [])
+        placements, dims, handles, lines = (asm.placements, asm.dims, asm.handles, asm.lines) if asm else (None, [], [], [])
         assembly = placements is not None
     except Exception as e:  # a broken placement must not break the 2D preview
-        placements, dims, handles, assembly = None, [], [], f"{type(e).__name__}: {e}"
+        placements, dims, handles, lines, assembly = None, [], [], [], f"{type(e).__name__}: {e}"
     for i, w in enumerate(parts):
         w["place"] = placements.get(i) if placements else None
     parts = [w for w in parts if not (w["place"] or {}).get("scrap")]
     return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "dims": dims,
                        "handles": handles,
+                       "lines": lines,
                        "thickness": box.thickness})

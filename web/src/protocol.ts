@@ -114,6 +114,24 @@ export interface Dimension {
 }
 
 /**
+ * Inner walls the 3D editor can drag: those between compartments `index` and `index + 1` of
+ * list parameter `arg` (`values`; TrayLayout: arg "layout" with `axis`, as in Dimension). They
+ * fill the world box min..max; moving them by 1 mm along `dir` makes compartment `index`
+ * `scale` mm larger (in parameter units) and the next one as much smaller.
+ */
+export interface GridLine {
+  arg: string;
+  index: number;
+  values: number[];
+  min: Vec3;
+  max: Vec3;
+  dir: Vec3;
+  scale: number;
+  label: string;
+  axis: "x" | "y" | null;
+}
+
+/**
  * Something the 3D editor can toggle at grid position (i, j): a wall piece along x ("hwall",
  * on grid line j) or along y ("vwall", on line i), or a floor cell. `on`: present now.
  * Fills the world box min..max (where it would be, if not present).
@@ -150,6 +168,7 @@ export type FromWorker =
       assembly: AssemblyStatus;
       dims: Dimension[];
       handles: Handle[];
+      lines: GridLine[];
       thickness: number;
       ms: number;
     }

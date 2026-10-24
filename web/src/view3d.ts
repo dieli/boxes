@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { bendGeometry } from "./bend";
-import type { Dimension, Handle, Placement, RecordedPart, Vec3 } from "./protocol";
+import type { Dimension, GridLine, Handle, Placement, RecordedPart, Vec3 } from "./protocol";
 
 const WOOD = 0xd9b382;
 const WOOD_EDGE = 0x6b4f2e;
@@ -55,6 +55,21 @@ export class AssemblyView {
   private hoverMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.45, depthWrite: false });
   private hover = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.hoverMaterial);
   private hovered: Handle | null = null;
+  // Edit mode: inner walls that can be dragged, the snap step and the drag in progress.
+  private lines: { line: GridLine; box: THREE.Box3 }[] = [];
+  private snap = 1;
+  private drag: {
+    line: GridLine;
+    start: THREE.Vector3;
+    dir: THREE.Vector3;
+    plane: THREE.Plane;
+    objects: PartObject[];
+    x: number;
+    y: number;
+    moved: boolean;
+    values: number[] | null;
+  } | null = null;
+  private dragTip = document.createElement("div");
 
   constructor(
     private container: HTMLElement,
@@ -65,11 +80,15 @@ export class AssemblyView {
     private onHandle: (handle: Handle) => void,
     /** "+" or "×" clicked on a compartment size (edit mode): split it or merge it with a neighbour. */
     private onChain: (dim: Dimension, op: "split" | "merge") => void,
+    /** Inner walls dragged in edit mode: the list parameter's new values. */
+    private onGridLine: (line: GridLine, values: number[]) => void,
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.labels.domElement.className = "labels3d";
-    container.append(this.renderer.domElement, this.labels.domElement);
+    this.dragTip.className = "drag-tip";
+    this.dragTip.hidden = true;
+    container.append(this.renderer.domElement, this.labels.domElement, this.dragTip);
 
     this.camera.up.set(0, 0, 1);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -208,6 +227,104 @@ export class AssemblyView {
     });
     this.setHover(null);
     this.applyDimsVisible();
+  }
+
+  /** The draggable inner walls of the current model. */
+  setLines(lines: GridLine[]) {
+    this.cancelDrag();
+    this.lines = lines.map((line) => ({
+      line,
+      box: new THREE.Box3(new THREE.Vector3(...line.min), new THREE.Vector3(...line.max)),
+    }));
+  }
+
+  /** Step dragged walls snap to (compartment sizes in mm); Shift while dragging: none. */
+  setSnap(mm: number) {
+    this.snap = mm > 0 ? mm : 1;
+  }
+
+  /** The grid line whose walls are under the pointer (edit mode, assembled view). */
+  private pickLine(ray: THREE.Raycaster): GridLine | null {
+    if (!this.ghosts.visible || !this.lines.length) return null;
+    const meshes = this.objects.filter((o) => o.group.visible).map((o) => o.mesh as THREE.Object3D);
+    const hit = ray.intersectObjects(meshes, false)[0];
+    if (!hit) return null;
+    const p = hit.point.clone().addScaledVector(ray.ray.direction, HANDLE_TOLERANCE / 2);
+    const found = this.lines.find((l) => l.box.distanceToPoint(p) < HANDLE_TOLERANCE);
+    return found?.line ?? null;
+  }
+
+  private startDrag(line: GridLine, ray: THREE.Raycaster, e: PointerEvent) {
+    const entry = this.lines.find((l) => l.line === line)!;
+    const meshes = this.objects.filter((o) => o.group.visible).map((o) => o.mesh as THREE.Object3D);
+    const start = ray.intersectObjects(meshes, false)[0]?.point;
+    if (!start) return;
+    const dir = new THREE.Vector3(...line.dir).normalize();
+    // Drag in the plane through the start point that contains dir and faces the camera most.
+    const view = this.camera.getWorldDirection(new THREE.Vector3());
+    const normal = view.clone().addScaledVector(dir, -view.dot(dir));
+    if (normal.lengthSq() < 1e-6) normal.set(0, 0, 1);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal.normalize(), start);
+    // The parts lying within the line's slab move with it (not the walls crossing it).
+    const axis = [0, 1, 2].reduce((a, b) => (Math.abs(dir.getComponent(b)) > Math.abs(dir.getComponent(a)) ? b : a));
+    const lo = entry.box.min.getComponent(axis) - 0.5;
+    const hi = entry.box.max.getComponent(axis) + 0.5;
+    const objects = this.objects.filter((o) => {
+      if (!o.group.visible) return false;
+      const b = new THREE.Box3().setFromObject(o.group);
+      return b.min.getComponent(axis) >= lo && b.max.getComponent(axis) <= hi;
+    });
+    this.drag = { line, start, dir, plane, objects, x: e.clientX, y: e.clientY, moved: false, values: null };
+    this.controls.enabled = false;
+    this.setHover(null);
+  }
+
+  private moveDrag(ray: THREE.Raycaster, e: PointerEvent) {
+    const d = this.drag!;
+    if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) <= CLICK_TOLERANCE_PX) return;
+    d.moved = true;
+    const p = ray.ray.intersectPlane(d.plane, new THREE.Vector3());
+    if (!p) return;
+    const { values, index: k, scale, label } = d.line;
+    const pair = values[k] + values[k + 1];
+    let size = values[k] + p.sub(d.start).dot(d.dir) * scale;
+    if (!e.shiftKey) size = Math.round(size / this.snap) * this.snap;
+    size = Math.round(Math.min(Math.max(size, 1), pair - 1) * 100) / 100;
+    const next = Math.round((pair - size) * 100) / 100;
+    d.values = values.map((v, i) => (i === k ? size : i === k + 1 ? next : v));
+    const offset = d.dir.clone().multiplyScalar((size - values[k]) / scale);
+    for (const o of d.objects) {
+      o.group.matrix.copy(new THREE.Matrix4().makeTranslation(offset).multiply(o.base));
+      o.group.matrixWorldNeedsUpdate = true;
+    }
+    const rect = this.container.getBoundingClientRect();
+    this.dragTip.textContent = `${label}[${k + 1}] ${formatMm(size)}  ·  ${label}[${k + 2}] ${formatMm(next)}`;
+    this.dragTip.style.left = `${e.clientX - rect.left + 14}px`;
+    this.dragTip.style.top = `${e.clientY - rect.top + 14}px`;
+    this.dragTip.hidden = false;
+    this.renderer.domElement.style.cursor = "grabbing";
+    this.needsRender = true;
+  }
+
+  /** Ends a drag; returns whether it moved (then it is not a click). */
+  private endDrag(): boolean {
+    const d = this.drag;
+    if (!d) return false;
+    this.drag = null;
+    this.controls.enabled = true;
+    this.dragTip.hidden = true;
+    const k = d.line.index;
+    if (d.values && d.values[k] !== d.line.values[k]) this.onGridLine(d.line, d.values);
+    else this.applyExplode();
+    return d.moved;
+  }
+
+  private cancelDrag() {
+    if (!this.drag) return;
+    this.drag = null;
+    this.controls.enabled = true;
+    this.dragTip.hidden = true;
+    this.applyExplode();
   }
 
   private setHover(handle: Handle | null) {
@@ -431,11 +548,31 @@ export class AssemblyView {
       return ray;
     };
     el.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
+    // Captured on the container, so a drag on an inner wall starts before the orbit controls see it.
+    this.container.addEventListener("pointerdown", (e) => {
+      if (!this.editing || e.button !== 0 || e.target !== el) return;
+      const ray = rayAt(e);
+      const line = this.pickLine(ray);
+      if (!line) return;
+      this.startDrag(line, ray, e);
+      el.setPointerCapture(e.pointerId);
+    }, true);
     el.addEventListener("pointermove", (e) => {
-      if (this.editing && !e.buttons) this.setHover(this.pickHandle(rayAt(e)));
+      if (this.drag) {
+        this.moveDrag(rayAt(e), e);
+        return;
+      }
+      if (!this.editing || e.buttons) return;
+      const ray = rayAt(e);
+      const handle = this.pickHandle(ray);
+      this.setHover(handle);
+      el.style.cursor = this.pickLine(ray) ? "grab" : handle ? "pointer" : "";
     });
-    el.addEventListener("pointerleave", () => this.setHover(null));
+    el.addEventListener("pointerleave", () => this.drag || this.setHover(null));
+    el.addEventListener("pointercancel", () => this.cancelDrag());
+    window.addEventListener("keydown", (e) => e.key === "Escape" && this.cancelDrag());
     el.addEventListener("pointerup", (e) => {
+      if (this.endDrag()) return;
       if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX) return;
       const ray = rayAt(e);
       if (this.editing) {
