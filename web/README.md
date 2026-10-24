@@ -47,11 +47,12 @@ npm run build    # static site in web/dist/
   - `src/py/placements.py`: one small function per generator, plus shared placers for the lids
     from `_TopEdge.drawLid` (top edges f/F/h/Š/Y/E, sliding lid L, hinged lids i/k/v; hinge pins
     stay 2D), `boxes.lids.Lid` (flat, flatbrim, flatfang, overthetop, ontop) and
-    `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces). Placed so far (49):
+    `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces). Placed so far (50):
     ABox, BasedBox, BeeQueenTransportBox, CardBox, ClosedBox, CompartmentBox, DiceBox, DisplayCase,
     DrillBox, DrillStand, ElectronicsBox, FlexBox, FlexBox2, FlexBox3, FlexBox4, FlexBox5,
     GridfinityDrillBox, MagazineFile, NightLightBox, OpenBox, PenHolderBox, RoundedBox, Shadowbox,
-    SlantedTray, SlidingDrawer, SlidingLidBox, StorageRack, StorageShelf, TwoPiece, TypeTray, UBox,
+    SlantedTray, SlidingDrawer, SlidingLidBox, StorageRack, StorageShelf, TrayLayout, TwoPiece,
+    TypeTray, UBox,
     UnevenHeightBox, UniversalBox, WallCaliper, WallChiselHolder, WallConsole, WallDrillBox,
     WallHook, WallHopper, WallPinRow, WallPlaneHolder, WallPliersHolder, WallRack, WallRollHolder,
     WallSlottedHolder, WallStackableBin, WallStairs, WallTypeTray, WallWrenchHolder.
@@ -65,6 +66,10 @@ npm run build    # static site in web/dist/
   rounded sides it is fitted to.
   Clicking a part in either view, or in the parts list, selects it everywhere. The parts list can
   hide single parts in 3D (kept while you edit parameters, reset when you switch generators).
+- TrayLayout: its `layout` text starts as the full `sx` x `sy` grid and follows them until you
+  edit it by hand (`src/layout.ts`, like the server UI's JavaScript); a layout that is still the
+  default is left out of the URL. Without a layout, the bridge does the same in Python, since
+  there is no layout file to fall back to in the browser.
 - Editable dimensions: a placement function can declare which parameters a dimension line shows
   (`BoxFrame.dims(x="x", y="y", h="h")`, list parameters like `sx` give one line per compartment,
   `"-sy"` runs back to front; `Assembly.dim()` for anything else). The 3D view draws them with

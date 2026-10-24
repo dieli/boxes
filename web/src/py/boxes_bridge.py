@@ -116,6 +116,12 @@ def _render_box(name: str, args_json: str):
     box = _generators[name]()
     args = json.loads(args_json)
     box.parseArgs([f"--{k}={v}" for k, v in args.items()] + ["--format=svg"])
+    if name == "TrayLayout" and not box.layout.strip():
+        # Like the server UI's JavaScript: without a layout, start from the sx x sy grid
+        # (there is no layout file to fall back to in the browser).
+        layout_file = boxes.generators.traylayout.TrayLayoutFile()
+        layout_file.fillDefault(box.sx, box.sy)
+        box.layout = str(layout_file)
     # Parameter values as given: generators with "outside" overwrite e.g. self.x with the inner size.
     box._web_args = {k: (list(v) if isinstance(v, list) else v) for k, v in vars(box).items()
                      if isinstance(v, (int, float, list)) and not isinstance(v, bool)}

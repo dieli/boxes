@@ -1,6 +1,7 @@
 import "./style.css";
 import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
+import { defaultLayout } from "./layout";
 import type { ArgValues, Dimension, GeneratorInfo, Placement, Point2, RecordedPart } from "./protocol";
 import type { AssemblyView } from "./view3d";
 
@@ -45,6 +46,7 @@ let hiddenKeys = new Set<string>();
 let keyOfPart = new Map<number, string>();
 
 const form = new ParamForm($("form"), () => {
+  syncLayout();
   clearTimeout(debounce);
   debounce = window.setTimeout(() => {
     writeHash();
@@ -55,13 +57,35 @@ const form = new ParamForm($("form"), () => {
 // --- URL state: #Generator?arg=value&… (only non-default args) ---
 
 function readHash(): { name: string; args: ArgValues } {
-  const [name, query = ""] = decodeURIComponent(location.hash.slice(1)).split("?", 2);
-  return { name, args: Object.fromEntries(new URLSearchParams(query)) };
+  // Only the name is decoded here: URLSearchParams decodes the query itself ("+" is a space,
+  // "%2B" a plus, as in TrayLayout's layout).
+  const [name, query = ""] = location.hash.slice(1).split("?", 2);
+  return { name: decodeURIComponent(name), args: Object.fromEntries(new URLSearchParams(query)) };
 }
 
 function writeHash() {
-  const query = new URLSearchParams(form.changedValues()).toString();
+  // A layout that is still the default grid follows sx/sy and is left out.
+  const values = layoutIsDefault() ? form.changedValuesExcept("layout") : form.changedValues();
+  const query = new URLSearchParams(values).toString();
   history.replaceState(null, "", `#${current}${query ? "?" + query : ""}`);
+}
+
+// --- TrayLayout: the layout text starts as the full sx x sy grid ---
+
+/** The default layout last put into the form; null if none. */
+let lastDefaultLayout: string | null = null;
+
+function layoutIsDefault(): boolean {
+  return current === "TrayLayout" && lastDefaultLayout !== null && form.get("layout") === lastDefaultLayout;
+}
+
+/** Fills the layout from sx/sy while it is empty or untouched (edited layouts are kept). */
+function syncLayout() {
+  if (current !== "TrayLayout") return;
+  const layout = form.get("layout") ?? "";
+  if (layout.trim() && layout !== lastDefaultLayout) return;
+  lastDefaultLayout = defaultLayout(form.get("sx") ?? "", form.get("sy") ?? "");
+  form.set("layout", lastDefaultLayout, false);
 }
 
 // --- Generator loading & rendering ---
@@ -78,6 +102,8 @@ async function loadGenerator(name: string, initial: ArgValues = {}) {
   if (current !== name) return;
   docEl.textContent = schema.doc;
   form.build(schema, initial);
+  lastDefaultLayout = null;
+  syncLayout();
   writeHash();
   await render();
 }

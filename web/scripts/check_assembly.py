@@ -33,6 +33,19 @@ from assembly import Part  # noqa: E402
 from placements import PLACEMENTS  # noqa: E402
 
 # Extra argument sets per generator (defaults are always checked).
+# Walls removed (a T crossing, an open side) and a compartment without floor.
+_LAYOUT = """ ,> 40mm
+ | ,> 60mm
+ | | ,> 30mm
++-+-+-+
+| | | |  50mm
++-+ +-+
+| |   |  30mm
++-+-+ +
+| |X| |  40mm
++-+-+-+
+"""
+
 CASES: dict[str, list[dict]] = {
     "TwoPiece": [{"hi": "30"}, {"outside": "1"}, {"play": "0.3"}],
     "SlidingDrawer": [{"hi": "20"}, {"outside": "1"}, {"play": "0.3"}],
@@ -101,6 +114,9 @@ CASES: dict[str, list[dict]] = {
                      {"vertical_edges": "finger holes"}, {"bottom_edge": "h"},
                      {"Lid_style": "flatfang"}, {"Lid_style": "overthetop"}],
     "TypeTray": [{"sx": "30:50:70", "sy": "20:60"}, {"top_edge": "f"}, {"bottom_edge": "e"}],
+    "TrayLayout": [{"sx": "30:50:70", "sy": "20:60"}, {"outside": "0", "hi": "40"},
+                   {"hi": "120"}, {"layout": _LAYOUT}, {"layout": _LAYOUT, "outside": "0"},
+                   {"Lid_style": "flat"}, {"Lid_style": "overthetop"}],
     "ClosedBox": [{"x": "60", "y": "120", "h": "40"}],
     "CardBox": [{"openingdirection": "right"}, {"sx": "40:65", "add_lidtopper": "1"}],
     "DiceBox": [{"lidheight": "25"}],

@@ -42,12 +42,23 @@ export class ParamForm {
     return out;
   }
 
-  /** Sets one parameter (e.g. from a dimension in the 3D view) and re-renders. */
-  set(name: string, value: string) {
+  get(name: string): string | undefined {
+    return this.values()[name];
+  }
+
+  /** Sets one parameter (e.g. from a dimension in the 3D view) and re-renders, unless !notify. */
+  set(name: string, value: string, notify = true) {
     const input = this.inputs.get(name);
     if (!input) return;
     setValue(input.arg, input.el, value);
-    this.onChange();
+    if (notify) this.onChange();
+  }
+
+  /** Changed values without the given parameters (e.g. ones derived from others). */
+  changedValuesExcept(...names: string[]): ArgValues {
+    const out = this.changedValues();
+    for (const name of names) delete out[name];
+    return out;
   }
 
   reset() {
@@ -102,6 +113,7 @@ function defaultString(arg: ArgSchema): string {
 function setValue(arg: ArgSchema, el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string) {
   if (arg.kind === "bool") (el as HTMLInputElement).checked = !["", "0", "false", "off", "none"].includes(value.toLowerCase());
   else el.value = value;
+  if (el instanceof HTMLTextAreaElement) el.rows = Math.max(3, value.split("\n").length + 1);
 }
 
 function stripMarkdown(s: string): string {

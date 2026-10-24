@@ -1430,3 +1430,52 @@ def flex_box3(a: Assembly) -> None:
         a.place(lid_sides[0], (x + t + d, base_l - t, z - h), Z, neg(Y), X, name="lid right")
         a.place(lid_sides[-1], (-d - t, base_l - t, z - h), Z, neg(Y), neg(X),
                 flip=lid_sides[-1].mirrored, name="lid left")
+
+
+# --- Tray layouts ---------------------------------------------------------------------
+
+@placement("TrayLayout")
+def tray_layout(a: Assembly) -> None:
+    """Walls from the layout grid: box.x/box.y are the column/row sizes, hwalls[j][i] the wall
+    pieces on grid line j (0 = back) above row j, vwalls[j][i] those on line i (0 = left) in
+    row j. walls() draws one wall per continuous run: lines y = 0..ly, then lines x = 0..lx."""
+    b = a.box
+    t = a.t
+    sx, sy = list(b.x), list(b.y)
+    lx, ly = len(sx), len(sy)
+    # Grid lines: material of x line i in [xs[i], xs[i] + t], of y line j in [ys[j], ys[j] + t].
+    xs = [-t]
+    for s in sx:
+        xs.append(xs[-1] + t + s)
+    ys = [-t] * (ly + 1)
+    for j in range(ly - 1, -1, -1):
+        ys[j] = ys[j + 1] + t + sy[j]
+    x, y = xs[-1], ys[0]
+    f = a.frame(x, y, b.h)
+    f.dims(h="h")
+    walls = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.walls"))
+    for j in range(ly + 1):
+        for start, end in _runs(b.hwalls[j][:lx]):
+            a.place(next(walls, None), (xs[start] + t, ys[j] + t, 0.0), X, Z, neg(Y),
+                    name=f"wall x {start + 1}/{j + 1}")
+    for i in range(lx + 1):
+        for start, end in _runs([row[i] for row in b.vwalls[:ly]]):
+            a.place(next(walls, None), (xs[i] + t, ys[start], 0.0), neg(Y), Z, neg(X),
+                    name=f"wall y {i + 1}/{start + 1}")
+    # The base plate is drawn from above with a margin of the F edge's width.
+    w = b.edges["F"].startWidth()
+    a.place(_helper(a.parts, "free").drawn_by("TrayLayout.base_plate").first(),
+            (-w, -w, -t), X, Y, Z, name="bottom")
+    place_lids(a, f, None)
+
+
+def _runs(flags) -> list[tuple[int, int]]:
+    """(start, end) of each run of True values."""
+    out, start = [], None
+    for k, on in enumerate(list(flags) + [False]):
+        if on and start is None:
+            start = k
+        elif not on and start is not None:
+            out.append((start, k))
+            start = None
+    return out
