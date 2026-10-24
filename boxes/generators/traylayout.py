@@ -20,6 +20,7 @@ from pathlib import Path
 import boxes
 from boxes import *
 from boxes import lids
+from boxes.generators.typetray import FingerHoleEdge, FingerHoleEdgeSettings
 
 
 class TrayLayoutFile(Boxes):
@@ -91,6 +92,8 @@ class TrayLayout(Boxes):
 
     ui_group = "Tray"
 
+    fingerholes = "none"  # for subclasses with their own arguments
+
     description = """This is a two step process. This is step 2.
 Edit the layout text graphics to adjust your tray.
 Put in the sizes for each column and row. You can replace the hyphens and
@@ -103,6 +106,11 @@ You can replace the space characters representing the floor by a "X" to remove t
         self.addSettingsArgs(boxes.edges.FingerJointSettings)
         self.addSettingsArgs(lids.LidSettings)
         self.buildArgParser("h", "hi", "outside", "sx", "sy")
+        self.addSettingsArgs(FingerHoleEdgeSettings)
+        self.argparser.add_argument(
+            "--fingerholes", action="store", type=str, default="none",
+            choices=["none", "inside-only", "front", "back", "front-and-back"],
+            help="finger holes in the walls along x; decide which outer walls get them, too")
         self.argparser.add_argument(
             "--layout", action="store", type=str, default="\n",
             help="""* Set **sx** and **sy** before editing this!
@@ -193,6 +201,20 @@ to remove the floor for this compartment.
         self.edges["s"] = boxes.edges.Slot(self, self.hi / 2.0)
         self.edges["C"] = boxes.edges.CrossingFingerHoleEdge(self, self.hi)
         self.edges["D"] = boxes.edges.CrossingFingerHoleEdge(self, self.hi, outset=self.thickness)
+        s = FingerHoleEdgeSettings(self.thickness, True,
+                **self.edgesettings.get("FingerHoleEdge", {}))
+        s.wallheight = 0 if self.fingerholes == "none" else self.hi
+        self.addPart(FingerHoleEdge(self, s))
+
+    def hasFingerHoles(self, y: int) -> bool:
+        """Do the walls on horizontal grid line y (0 = back) get finger holes."""
+        if self.fingerholes == "none":
+            return False
+        if y == 0:
+            return self.fingerholes in ("back", "front-and-back")
+        if y == len(self.y):
+            return self.fingerholes in ("front", "front-and-back")
+        return True
 
     def wallLabelsCB(self, start, end, row, x=True):
         if not self.labels:
@@ -271,10 +293,15 @@ to remove the floor for this compartment.
                 edges.pop()
                 le = le_f if start == 0 and y not in (0, ly) else (ole_f if start > 0 and y in (0, ly) else "f")
                 re = re_f if end == lx and y not in (0, ly) else (ore_f if end < lx and y in (0, ly) else "f")
+                top = "e"
+                if self.hasFingerHoles(y):
+                    # one finger hole per compartment, none over the crossings
+                    top = boxes.edges.CompoundEdge(
+                        self, ["Ae"[i % 2] for i in range(len(lengths))], lengths[::-1])
                 self.rectangularWall(sum(lengths), h, [
                     boxes.edges.CompoundEdge(self, edges, lengths),
                     re if self.vWalls(end, y) else "e",
-                    "e",
+                    top,
                     le if self.vWalls(start, y) else "e"],
                                      callback=[lambda: self.wallLabelsCB(start, end, y)],
                                      move="right")
