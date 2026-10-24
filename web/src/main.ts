@@ -1,8 +1,8 @@
 import "./style.css";
 import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
-import { defaultLayout, setLayoutSize } from "./layout";
-import type { ArgValues, Dimension, GeneratorInfo, Placement, Point2, RecordedPart } from "./protocol";
+import { defaultLayout, mergeLayout, mergePair, mergeSizes, setLayoutSize, splitLayout, splitSizes, toggleLayout } from "./layout";
+import type { ArgValues, Dimension, GeneratorInfo, Handle, Placement, Point2, RecordedPart } from "./protocol";
 import type { AssemblyView } from "./view3d";
 
 const DEBOUNCE_MS = 150;
@@ -32,6 +32,7 @@ let generators = new Map<string, GeneratorInfo>();
 let current = "";
 let lastSvg = "";
 let lastParts: RecordedPart[] = [];
+let lastThickness = 3;
 let zoom = 1;
 let debounce: number | undefined;
 /** Selected part, as the index of its `<g id="p-N">` in the SVG. */
@@ -179,6 +180,7 @@ async function render() {
     if (!result || name !== current) return; // superseded by a newer request
     lastSvg = result.svg;
     lastParts = result.parts;
+    lastThickness = result.thickness;
     preview.innerHTML = result.svg;
     applyZoom();
     if (selected !== null && !preview.querySelector(`#p-${selected}`)) selected = null;
@@ -215,12 +217,74 @@ function applyZoom() {
 
 function getView3d(): Promise<AssemblyView> {
   view3dLoading ??= import("./view3d").then(({ AssemblyView }) => {
-    view3d = new AssemblyView($("canvas3d"), (part) => select(part), setDimension);
+    view3d = new AssemblyView($("canvas3d"), (part) => select(part), setDimension, toggleHandle, changeChain);
     view3d.setExplode(Number(explodeInput.value));
     view3d.setDimensionsVisible(showDimsInput.checked);
     return view3d;
   });
   return view3dLoading;
+}
+
+// --- View / Edit mode of the 3D panel ---
+
+const modeViewBtn = $<HTMLButtonElement>("mode-view");
+const modeEditBtn = $<HTMLButtonElement>("mode-edit");
+const editHint = $("edit-hint");
+const convertBtn = $<HTMLButtonElement>("convert-tray");
+let editMode = false;
+
+function setEditMode(on: boolean) {
+  editMode = on && !modeEditBtn.disabled;
+  modeViewBtn.classList.toggle("active", !editMode);
+  modeEditBtn.classList.toggle("active", editMode);
+  editHint.hidden = !editMode;
+  convertBtn.hidden = !editMode || current !== "TypeTray";
+  // Handles sit where the parts are assembled.
+  if (editMode) {
+    explodeInput.value = "0";
+    view3d?.setExplode(0);
+  }
+  explodeInput.disabled = editMode;
+  view3d?.setEditing(editMode);
+}
+
+/** A wall piece or floor clicked in edit mode (TrayLayout): toggle it in the layout text. */
+function toggleHandle(handle: Handle) {
+  if (current !== "TrayLayout") return;
+  const layout = toggleLayout(form.get("layout") ?? "", handle.kind, handle.i, handle.j);
+  if (layout === null) return;
+  undoSource = `handle:${performance.now()}`; // every click is its own undo step
+  form.set("layout", layout);
+}
+
+/** "+"/"×" on a compartment size: split it in two or merge it with its neighbour, keeping the total. */
+function changeChain(dim: Dimension, op: "split" | "merge") {
+  if (dim.index === null || !dim.values) return;
+  // Outside measurements already include the walls between compartments.
+  const t = form.get("outside") === "1" ? 0 : lastThickness;
+  const m = mergePair(dim.index, dim.values.length);
+  const sizes = op === "split" ? splitSizes(dim.values, dim.index, t) : mergeSizes(dim.values, m, t);
+  if (!sizes) return;
+  undoSource = `chain:${performance.now()}`;
+  if (dim.arg === "layout" && dim.axis) {
+    const layout = op === "split"
+      ? splitLayout(form.get("layout") ?? "", dim.axis, dim.index, sizes)
+      : mergeLayout(form.get("layout") ?? "", dim.axis, m, sizes);
+    if (layout !== null) form.set("layout", layout);
+    return;
+  }
+  form.set(dim.arg, sizes.map((x) => String(Math.round(x * 100) / 100)).join(":"));
+}
+
+/** TypeTray -> TrayLayout with the same grid and the settings both share; Back returns. */
+async function convertToTrayLayout() {
+  const schema = await client.schema("TrayLayout");
+  const names = new Set(schema.groups.flatMap((g) => g.args.map((a) => a.name)));
+  const all = form.values();
+  const values: ArgValues = { ...form.changedValues() };
+  for (const name of ["sx", "sy", "h", "hi"]) values[name] = all[name];
+  const shared = Object.entries(values).filter(([name]) => names.has(name) && name !== "layout");
+  location.hash = `TrayLayout?${new URLSearchParams(shared).toString()}`;
 }
 
 /** A dimension edited in 3D: write it into the form, which re-renders as for any edit. */
@@ -253,6 +317,8 @@ async function update3d(name: string, result: RenderResult) {
   $("no3d-name").textContent = name;
   if (none) {
     assemblyErrorEl.hidden = true;
+    modeEditBtn.disabled = true;
+    setEditMode(false);
     return;
   }
   assemblyErrorEl.hidden = !failed;
@@ -261,6 +327,14 @@ async function update3d(name: string, result: RenderResult) {
   if (name !== current) return;
   view.update(result.parts, placements, result.thickness, fittedFor !== name);
   view.setDimensions(result.dims);
+  view.setHandles(result.handles);
+  modeEditBtn.disabled = !result.handles.length && !result.dims.some((d) => d.index !== null && d.values);
+  editHint.textContent = [
+    result.handles.length ? "Click a wall piece to remove it, a green ghost to put it back, a floor to toggle it." : "",
+    "+ / × on a size splits or merges compartments.",
+    name === "TypeTray" ? "Single wall pieces: convert to TrayLayout." : "",
+  ].filter(Boolean).join(" ");
+  setEditMode(editMode);
   fittedFor = name;
   view.setSelected(selected);
   buildPartsList(result.parts);
@@ -404,6 +478,9 @@ window.addEventListener("hashchange", () => {
 $("reset").addEventListener("click", () => form.reset());
 $("zoom-in").addEventListener("click", () => ((zoom *= 1.25), applyZoom()));
 undoBtn.addEventListener("click", () => stepUndo(-1));
+modeViewBtn.addEventListener("click", () => setEditMode(false));
+modeEditBtn.addEventListener("click", () => setEditMode(true));
+convertBtn.addEventListener("click", () => void convertToTrayLayout());
 redoBtn.addEventListener("click", () => stepUndo(1));
 window.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;

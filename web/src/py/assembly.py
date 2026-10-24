@@ -146,6 +146,7 @@ class Assembly:
         self.parts = Parts(Part(i, w) for i, w in enumerate(walls))
         self.placements: dict[int, dict] = {}
         self.dims: list[dict] = []
+        self.handles: list[dict] = []
 
     def place(self, part: Part | None, origin: Vec, u: Vec, v: Vec, n: Vec,
               rot: int = 0, flip: bool = False, name: str = "",
@@ -199,12 +200,14 @@ class Assembly:
 
     def dim(self, arg: str, a: Vec, b: Vec, out: Vec, index: int | None = None,
             sizes: list[float] | None = None, label: str | None = None,
-            axis: str | None = None) -> None:
+            axis: str | None = None, value: float | None = None) -> None:
         """An editable dimension in the 3D view: parameter arg (element index of a list
         parameter like sx) measured from a to b, drawn offset along the unit vector out.
         sizes are the list's elements if they are not the parameter itself (e.g. the column
-        sizes in TrayLayout's layout text, axis "x" or "y"); label overrides the shown name."""
-        value = self.arg(arg) if sizes is None else sizes
+        sizes in TrayLayout's layout text, axis "x" or "y"); label overrides the shown name, value
+        the shown value."""
+        if value is None:
+            value = self.arg(arg) if sizes is None else sizes
         values = None
         if index is not None:
             values = [float(v) for v in value]
@@ -213,6 +216,11 @@ class Assembly:
             return
         self.dims.append({"arg": arg, "index": index, "values": values, "value": float(value),
                           "a": a, "b": b, "out": out, "label": label, "axis": axis})
+
+    def handle(self, kind: str, i: int, j: int, on: bool, lo: Vec, hi: Vec) -> None:
+        """Something the 3D editor can toggle, e.g. a wall piece ("hwall"/"vwall") or a floor
+        cell ("floor") at grid position (i, j), present or not (on), filling the box lo..hi."""
+        self.handles.append({"kind": kind, "i": i, "j": j, "on": bool(on), "min": lo, "max": hi})
 
     def frame(self, x: float, y: float, h: float, origin: Vec = (0.0, 0.0, 0.0),
               name: str = "") -> "BoxFrame":
@@ -286,11 +294,22 @@ class BoxFrame:
         if y:
             self.chain(y[1:], "-y") if y.startswith("-") else self.chain(y, "y")
         if h:
-            value = self.asm.arg(h)
-            extra = value - self.h if isinstance(value, (int, float)) else 0.0
-            below = min(max(extra, 0.0), t)
-            self.asm.dim(h, self.at(self.x + t, -t, -below), self.at(self.x + t, -t, self.h + extra - below),
-                         (0.7071, -0.7071, 0.0))
+            self.height(h, self.x + t, -t, self.h, (0.7071, -0.7071, 0.0))
+
+    def height(self, arg: str, x: float, y: float, h: float, out: Vec,
+               fallback: str | None = None) -> None:
+        """Dimension of walls h high standing at (x, y) from parameter arg (if 0: from parameter
+        fallback, e.g. hi = 0 meaning "same as h"). With "outside" the parameter is larger than h;
+        the difference goes below first (the floor)."""
+        value = self.asm.arg(arg)
+        if not value and fallback:
+            value = self.asm.arg(fallback)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return
+        extra = value - h
+        below = min(max(extra, 0.0), self.asm.t)
+        self.asm.dim(arg, self.at(x, y, -below), self.at(x, y, h + extra - below), out,
+                     value=float(value))
 
     def chain(self, arg: str, side: str, sizes: list[float] | None = None,
               label: str | None = None, axis: str | None = None) -> None:

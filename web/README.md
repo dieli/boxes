@@ -84,6 +84,22 @@ npm run build    # static site in web/dist/
 - Undo/redo (toolbar, Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) over all parameter changes, per generator.
   Quick repeated changes to the same parameter or dimension (typing, arrow keys) are one step;
   form text fields keep their own native undo while focused.
+- View/Edit switch in the 3D panel. In Edit mode (assembled view only), clicking a wall piece
+  removes it, clicking its green ghost puts it back, and clicking a floor cell toggles the floor.
+  Each click is one undo step. The placement map reports the toggleable things with
+  `Assembly.handle(kind, i, j, on, lo, hi)`; the click rewrites one character of the layout text
+  (`toggleLayout` in `src/layout.ts`). Only TrayLayout so far.
+- Also in Edit mode, compartment sizes (sx/sy, TrayLayout's columns/rows) get "+" (split in two,
+  adding a wall) and "×" (merge with the next one, or the previous for the last), keeping the total
+  size: without `outside` the wall's thickness comes out of / goes back into the sizes. TrayLayout
+  changes its layout text (`splitLayout`/`mergeLayout`: parsed into a grid and written back in
+  TrayLayoutFile's format; a split adds a full wall, a merge keeps walls/floors of either side).
+  Generators with neither handles nor compartment lists keep Edit disabled.
+- TypeTray's Edit mode has "Convert to TrayLayout": same grid (sx, sy, h, hi) and the shared
+  settings, so single wall pieces and floors can be removed. Browser Back returns to the TypeTray.
+- `hi` (inner wall height, 0 = same as `h`) has its own dimension on the first inner wall
+  (TypeTray, TrayLayout), e.g. for low inserts under a rulebook.
+- Dimension labels that would overlap on screen (narrow compartments) are moved down a row.
 
 ### Checking placements
 

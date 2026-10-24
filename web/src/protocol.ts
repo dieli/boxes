@@ -113,6 +113,20 @@ export interface Dimension {
   axis: "x" | "y" | null;
 }
 
+/**
+ * Something the 3D editor can toggle at grid position (i, j): a wall piece along x ("hwall",
+ * on grid line j) or along y ("vwall", on line i), or a floor cell. `on`: present now.
+ * Fills the world box min..max (where it would be, if not present).
+ */
+export interface Handle {
+  kind: "hwall" | "vwall" | "floor";
+  i: number;
+  j: number;
+  on: boolean;
+  min: Vec3;
+  max: Vec3;
+}
+
 /** true: generator has a placement map; string: it failed (error message); false: none. */
 export type AssemblyStatus = boolean | string;
 
@@ -135,6 +149,7 @@ export type FromWorker =
       parts: RecordedPart[];
       assembly: AssemblyStatus;
       dims: Dimension[];
+      handles: Handle[];
       thickness: number;
       ms: number;
     }

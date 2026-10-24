@@ -183,6 +183,7 @@ def type_tray(a: Assembly) -> None:
     y = sum(b.sy) + t * (len(b.sy) - 1)
     f = a.frame(x, y, b.h)
     f.dims(x="sx", y="-sy", h="h")
+    _inner_height(f, positions(b.sx, t), [y - y0 - t for y0 in positions(b.sy, t)], b.hi)
     p = a.parts
     _outer_walls(a, f, {"front": "front", "back": "back", "left side": "left",
                         "right side": "right", "bottom": "bottom"})
@@ -1459,6 +1460,7 @@ def tray_layout(a: Assembly) -> None:
     type(b).parse(given, b.layout.split("\n"))
     f.chain("layout", "x", given.x, label="x", axis="x")
     f.chain("layout", "-y", given.y, label="y", axis="y")
+    _inner_height(f, xs[1:-1], ys[1:-1], b.hi)
     walls = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.walls"))
     for j in range(ly + 1):
         for start, end in _runs(b.hwalls[j][:lx]):
@@ -1468,11 +1470,33 @@ def tray_layout(a: Assembly) -> None:
         for start, end in _runs([row[i] for row in b.vwalls[:ly]]):
             a.place(next(walls, None), (xs[i] + t, ys[start], 0.0), neg(Y), Z, neg(X),
                     name=f"wall y {i + 1}/{start + 1}")
+    # Editable in 3D: every wall piece of the grid and every floor cell.
+    for j in range(ly + 1):
+        h = b.h if j in (0, ly) else b.hi
+        for i in range(lx):
+            a.handle("hwall", i, j, b.hwalls[j][i], (xs[i] + t, ys[j], 0.0), (xs[i + 1], ys[j] + t, h))
+    for j in range(ly):
+        for i in range(lx + 1):
+            h = b.h if i in (0, lx) else b.hi
+            a.handle("vwall", i, j, b.vwalls[j][i], (xs[i], ys[j + 1] + t, 0.0), (xs[i] + t, ys[j], h))
+        for i in range(lx):
+            a.handle("floor", i, j, b.floors[j][i], (xs[i] + t, ys[j + 1] + t, -t), (xs[i + 1], ys[j], 0.0))
     # The base plate is drawn from above with a margin of the F edge's width.
     w = b.edges["F"].startWidth()
     a.place(_helper(a.parts, "free").drawn_by("TrayLayout.base_plate").first(),
             (-w, -w, -t), X, Y, Z, name="bottom")
     place_lids(a, f, None)
+
+
+def _inner_height(f, xs: list[float], ys: list[float], hi: float) -> None:
+    """Dimension "hi" of the inner walls (0 = as high as the outer walls): at the front end of
+    the first inner wall along y (material from xs[k]), else at the right end of the first one
+    along x (from ys[k]). Without inner walls there is nothing to show."""
+    t = f.asm.t
+    if xs:
+        f.height("hi", xs[0] + t / 2, -t, hi, neg(Y), fallback="h")
+    elif ys:
+        f.height("hi", f.x + t, ys[0] + t / 2, hi, X, fallback="h")
 
 
 def _runs(flags) -> list[tuple[int, int]]:

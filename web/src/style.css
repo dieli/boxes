@@ -162,6 +162,20 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   text-align: right;
 }
 .dim3d input:focus { outline: 1px solid #2563eb; background: var(--bg); }
+.dim3d .chain-op {
+  display: none;
+  padding: 0 4px;
+  border: 1px solid #2563eb;
+  border-radius: 3px;
+  background: transparent;
+  color: #2563eb;
+  font: inherit;
+  line-height: 14px;
+  cursor: pointer;
+}
+.labels3d.editing .dim3d .chain-op { display: inline-block; }
+.dim3d .chain-op:hover { background: #2563eb; color: #fff; }
+.dim3d .chain-op.merge:hover { background: #dc2626; border-color: #dc2626; }
 #canvas3d { position: absolute; inset: 0; }
 #canvas3d canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .controls3d {
@@ -178,6 +192,25 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   background: color-mix(in srgb, var(--panel) 85%, transparent);
 }
 .controls3d label { display: flex; align-items: center; gap: 6px; }
+.mode3d { display: flex; }
+.mode3d button { border-radius: 0; }
+.mode3d button:first-child { border-radius: 4px 0 0 4px; }
+.mode3d button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.mode3d button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+#edit-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  font-size: 12px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  text-align: center;
+}
 .controls3d button { padding: 2px 8px; }
 #assembly-error {
   position: absolute;

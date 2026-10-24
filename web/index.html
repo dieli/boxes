@@ -38,6 +38,12 @@
         <section id="panel3d">
           <div id="canvas3d"></div>
           <div class="controls3d">
+            <div class="mode3d" role="group" aria-label="Mode">
+              <button id="mode-view" class="secondary active" title="Orbit and select parts">View</button>
+              <button id="mode-edit" class="secondary" title="Change compartments, walls and floors in 3D" disabled>Edit</button>
+            </div>
+            <button id="convert-tray" class="secondary" hidden
+              title="Same grid as a TrayLayout, where single wall pieces and floors can be removed (TypeTray-only options like grip holes and labels are not carried over)">Convert to TrayLayout</button>
             <label>Explode <input id="explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
             <label><input id="show-dims" type="checkbox" checked /> Dimensions</label>
             <button id="reset-camera" class="secondary" title="Reset camera">Reset view</button>
@@ -51,6 +57,7 @@
             <ul id="parts-list"></ul>
           </details>
           <p id="assembly-error" hidden></p>
+          <p id="edit-hint" hidden></p>
           <div id="no3d" hidden>
             <p><strong>3D view not implemented yet</strong> for <span id="no3d-name"></span>.</p>
             <p>The 2D sheet and downloads work as usual.</p>

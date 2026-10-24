@@ -2,12 +2,16 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { bendGeometry } from "./bend";
-import type { Dimension, Placement, RecordedPart, Vec3 } from "./protocol";
+import type { Dimension, Handle, Placement, RecordedPart, Vec3 } from "./protocol";
 
 const WOOD = 0xd9b382;
 const WOOD_EDGE = 0x6b4f2e;
 const SELECTED = 0xf97316;
 const DIMENSION = 0x2563eb;
+const REMOVE = 0xdc2626;
+const ADD = 0x16a34a;
+/** How far a click point may lie outside a handle's box (mm): faces of a part lie on it. */
+const HANDLE_TOLERANCE = 0.2;
 const CLICK_TOLERANCE_PX = 4;
 
 interface PartObject {
@@ -42,12 +46,25 @@ export class AssemblyView {
   private showDims = true;
   /** Dimension input to focus once the label renderer has put it into the page. */
   private refocus: HTMLInputElement | null = null;
+  // Edit mode: handles (toggleable wall pieces, floors), ghosts of the absent ones, hover box.
+  private editing = false;
+  private handles: { handle: Handle; box: THREE.Box3; ghost: THREE.Mesh | null }[] = [];
+  private ghosts = new THREE.Group();
+  private ghostMaterial = new THREE.MeshBasicMaterial({ color: ADD, transparent: true, opacity: 0.12, depthWrite: false });
+  private ghostEdgeMaterial = new THREE.LineBasicMaterial({ color: ADD, transparent: true, opacity: 0.6 });
+  private hoverMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.45, depthWrite: false });
+  private hover = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.hoverMaterial);
+  private hovered: Handle | null = null;
 
   constructor(
     private container: HTMLElement,
     private onSelect: (svgPart: number | null) => void,
     /** A dimension label was edited: the parameter's new value. */
     private onDimension: (dim: Dimension, value: number) => void,
+    /** A handle was clicked in edit mode. */
+    private onHandle: (handle: Handle) => void,
+    /** "+" or "×" clicked on a compartment size (edit mode): split it or merge it with a neighbour. */
+    private onChain: (dim: Dimension, op: "split" | "merge") => void,
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -61,7 +78,9 @@ export class AssemblyView {
 
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8d7c6a, 1.6));
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.root, this.dims);
+    this.scene.add(this.root, this.dims, this.ghosts, this.hover);
+    this.hover.visible = false;
+    this.hover.renderOrder = 2;
 
     new ResizeObserver(() => this.resize()).observe(container);
     this.installPicking();
@@ -70,6 +89,7 @@ export class AssemblyView {
         this.needsRender = false;
         this.renderer.render(this.scene, this.camera);
         this.labels.render(this.scene, this.camera);
+        this.declutterLabels();
         this.refocus?.focus();
         this.refocus = null;
       }
@@ -152,8 +172,96 @@ export class AssemblyView {
   }
 
   private applyDimsVisible() {
-    this.dims.visible = this.showDims && this.explode === 0;
+    this.dims.visible = (this.showDims || this.editing) && this.explode === 0;
+    this.ghosts.visible = this.editing && this.explode === 0;
+    if (!this.ghosts.visible) this.setHover(null);
     this.needsRender = true;
+  }
+
+  /** Edit mode: clicks toggle handles instead of selecting parts (assembled view only). */
+  setEditing(on: boolean) {
+    this.editing = on;
+    this.labels.domElement.classList.toggle("editing", on);
+    this.renderer.domElement.style.cursor = "";
+    this.applyDimsVisible();
+  }
+
+  /** The toggleable things of the current model; absent ones are shown as ghosts in edit mode. */
+  setHandles(handles: Handle[]) {
+    for (const c of [...this.ghosts.children]) {
+      this.ghosts.remove(c);
+      if (c instanceof THREE.Mesh || c instanceof THREE.LineSegments) c.geometry.dispose();
+    }
+    this.handles = handles.map((handle) => {
+      const box = new THREE.Box3(new THREE.Vector3(...handle.min), new THREE.Vector3(...handle.max));
+      let ghost: THREE.Mesh | null = null;
+      if (!handle.on) {
+        const size = box.getSize(new THREE.Vector3());
+        const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+        ghost = new THREE.Mesh(geometry, this.ghostMaterial);
+        box.getCenter(ghost.position);
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), this.ghostEdgeMaterial);
+        edges.position.copy(ghost.position);
+        this.ghosts.add(ghost, edges);
+      }
+      return { handle, box, ghost };
+    });
+    this.setHover(null);
+    this.applyDimsVisible();
+  }
+
+  private setHover(handle: Handle | null) {
+    if (handle === this.hovered) return;
+    this.hovered = handle;
+    this.hover.visible = handle !== null;
+    this.renderer.domElement.style.cursor = handle ? "pointer" : "";
+    if (handle) {
+      const entry = this.handles.find((h) => h.handle === handle)!;
+      const grow = new THREE.Vector3(0.3, 0.3, 0.3);
+      const box = entry.box.clone().expandByVector(grow);
+      box.getCenter(this.hover.position);
+      box.getSize(this.hover.scale);
+      this.hoverMaterial.color.setHex(handle.on ? REMOVE : ADD);
+    }
+    this.needsRender = true;
+  }
+
+  /** The handle under the pointer: a ghost, or the handle whose box holds the point hit on a part. */
+  private pickHandle(ray: THREE.Raycaster): Handle | null {
+    if (!this.ghosts.visible) return null;
+    const meshes = this.objects.filter((o) => o.group.visible).map((o) => o.mesh as THREE.Object3D);
+    const ghosts = this.handles.filter((h) => h.ghost).map((h) => h.ghost as THREE.Object3D);
+    const hit = ray.intersectObjects([...meshes, ...ghosts], false)[0];
+    if (!hit) return null;
+    const ghost = this.handles.find((h) => h.ghost === hit.object);
+    if (ghost) return ghost.handle;
+    // Step a little into the part, so a point on a face falls into the part's own handle.
+    const p = hit.point.clone().addScaledVector(ray.ray.direction, HANDLE_TOLERANCE / 2);
+    const inside = this.handles.filter((h) => h.handle.on && h.box.containsPoint(p));
+    if (inside.length) return inside[0].handle;
+    const near = this.handles.filter((h) => h.handle.on && h.box.distanceToPoint(p) < HANDLE_TOLERANCE);
+    return near[0]?.handle ?? null;
+  }
+
+  /** Moves dimension labels that overlap earlier ones down on screen (narrow compartments). */
+  private declutterLabels() {
+    if (!this.dims.visible) return;
+    const labels = [...this.labels.domElement.querySelectorAll<HTMLElement>(".dim3d")];
+    for (const l of labels) l.style.translate = "";
+    const placed: DOMRect[] = [];
+    const overlaps = (a: DOMRect, b: DOMRect) =>
+      a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    for (const l of labels) {
+      let r = l.getBoundingClientRect();
+      if (!r.width) continue;
+      let dy = 0;
+      for (let step = 0; step < 8 && placed.some((p) => overlaps(p, r)); step++) {
+        dy += r.height + 2;
+        r = new DOMRect(r.x, r.y + r.height + 2, r.width, r.height);
+      }
+      if (dy) l.style.translate = `0 ${dy}px`;
+      placed.push(r);
+    }
   }
 
   private dimLabel(dim: Dimension, focused: string | undefined): HTMLElement {
@@ -189,6 +297,20 @@ export class AssemblyView {
       }
     });
     el.append(name, input);
+    if (dim.index !== null && dim.values) {
+      const count = dim.values.length;
+      const op = (text: string, title: string, kind: "split" | "merge") => {
+        const b = Object.assign(document.createElement("button"), { type: "button", textContent: text, title });
+        b.className = `chain-op ${kind}`;
+        b.addEventListener("click", () => this.onChain(dim, kind));
+        return b;
+      };
+      el.append(op("+", "Split in two (adds a wall)", "split"));
+      if (count > 1) {
+        const other = dim.index < count - 1 ? "next" : "previous";
+        el.append(op("×", `Merge with the ${other} one (removes the wall between)`, "merge"));
+      }
+    }
     if (key === focused) this.refocus = input;
     return el;
   }
@@ -294,17 +416,33 @@ export class AssemblyView {
     this.needsRender = true;
   }
 
-  /** Click (not drag) on a part selects it; click on empty space clears the selection. */
+  /**
+   * Click (not drag) on a part selects it; click on empty space clears the selection.
+   * In edit mode a click toggles the handle under the pointer, which is highlighted on hover.
+   */
   private installPicking() {
     const el = this.renderer.domElement;
     let down: { x: number; y: number } | null = null;
-    el.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
-    el.addEventListener("pointerup", (e) => {
-      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX) return;
+    const rayAt = (e: PointerEvent) => {
       const rect = el.getBoundingClientRect();
       const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
       const ray = new THREE.Raycaster();
       ray.setFromCamera(ndc, this.camera);
+      return ray;
+    };
+    el.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
+    el.addEventListener("pointermove", (e) => {
+      if (this.editing && !e.buttons) this.setHover(this.pickHandle(rayAt(e)));
+    });
+    el.addEventListener("pointerleave", () => this.setHover(null));
+    el.addEventListener("pointerup", (e) => {
+      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX) return;
+      const ray = rayAt(e);
+      if (this.editing) {
+        const handle = this.pickHandle(ray);
+        if (handle) this.onHandle(handle);
+        return;
+      }
       const visible = this.objects.filter((o) => o.group.visible).map((o) => o.mesh);
       const hit = ray.intersectObjects(visible)[0];
       const svgPart = hit ? (hit.object.parent!.userData.svgPart as number) : null;
