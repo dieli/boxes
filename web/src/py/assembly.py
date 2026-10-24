@@ -59,6 +59,11 @@ class Part:
         x, y = self.x, self.y
         if rec["helper"] == "polygonWall":
             return _polygon_segments(rec["params"]["borders"], rec["params"]["start"])
+        if rec["helper"] == "roundedPlate":
+            # Only the straight parts between the rounded corners.
+            r = min(rec["params"]["r"], x / 2, y / 2)
+            return [((r, 0.0), (1.0, 0.0), x - 2 * r), ((x, r), (0.0, 1.0), y - 2 * r),
+                    ((x - r, y), (-1.0, 0.0), x - 2 * r), ((0.0, y - r), (0.0, -1.0), y - 2 * r)]
         if rec["helper"] in ("trapezoidWall", "trapezoidSideWall"):
             corners = [(0, 0), (x, 0), (x, rec["params"]["h1"]), (0, rec["params"]["h0"])]
         elif rec["helper"] == "rectangularTriangle":
@@ -141,7 +146,8 @@ class Assembly:
         self.placements: dict[int, dict] = {}
 
     def place(self, part: Part | None, origin: Vec, u: Vec, v: Vec, n: Vec,
-              rot: int = 0, flip: bool = False, name: str = "") -> None:
+              rot: int = 0, flip: bool = False, name: str = "",
+              thickness: float | None = None, bend: list | None = None) -> None:
         """Places a part on the plane (origin, u, v) with material along n.
 
         rot turns the part counter-clockwise in that plane (as seen from n), in degrees
@@ -149,6 +155,11 @@ class Assembly:
         (w, h) is its size after rotation. flip mounts it the other side out (reflected in
         its own x), as does drawing it mirrored; both together cancel out.
         name is shown in the UI for parts the generator did not label.
+        thickness overrides the box's for parts made of other material (e.g. acrylic inserts).
+        bend makes a flex part follow a path: [(x0, angle, r[, stretch]), ...] arcs from local
+        x = x0 of radius r (at the face on the plane) through angle degrees, turning towards -n
+        for positive angles; straight in between. stretch is the arc length per length of the
+        part (flex settings' stretch). Only for parts without rot or reflection.
         """
         if part is None:
             return
@@ -166,6 +177,18 @@ class Assembly:
             o, ux = add(o, ux, px), neg(ux)
         part.placed = True
         self.placements[part.index] = {"origin": o, "ux": ux, "uy": uy, "n": n, "name": name}
+        if thickness is not None:
+            self.placements[part.index]["t"] = thickness
+        if bend:
+            assert k == 0 and part.mirrored == flip, "bent parts can't be turned or reflected"
+            self.placements[part.index]["bend"] = [list(b) for b in bend]
+
+    def scrap(self, part: Part | None) -> None:
+        """A recorded piece that is offcut, not a part (e.g. drawn inside a hole): it stays in
+        the 2D sheet but is left out of the part list."""
+        if part is not None:
+            part.placed = True
+            self.placements[part.index] = {"scrap": True}
 
     def frame(self, x: float, y: float, h: float, origin: Vec = (0.0, 0.0, 0.0),
               name: str = "") -> "BoxFrame":

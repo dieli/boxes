@@ -7,9 +7,10 @@ uses them only needs to call place_lids().
 """
 from __future__ import annotations
 
+import math
 from typing import Callable
 
-from assembly import Assembly, BoxFrame, X, Y, Z, _polygon_segments, neg, positions
+from assembly import Assembly, BoxFrame, add, X, Y, Z, _polygon_segments, neg, positions
 
 PLACEMENTS: dict[str, Callable[[Assembly], None]] = {}
 
@@ -466,6 +467,215 @@ def wall_console(a: Assembly) -> None:
                 name="rib")
 
 
+def _wall_side(a: Assembly, part, x0: float, name: str = "side", face: float | None = None,
+               z0: float = 0.0) -> None:
+    """A side profile drawn by hand with its wall edge on the left, standing at x0..x0+t.
+    face is the local x that touches the wall plate (b edge: t, its fingers fill 0..t) or the
+    wall itself (a edge: its margin). The wall plate's front face is y = 0 (it fills y 0..t),
+    the profile sticks out towards -y. Mirrored copies are the same shape the other side out."""
+    face = a.t if face is None else face
+    a.place(part, (x0, face, z0), neg(Y), Z, X, flip=part.mirrored if part else False, name=name)
+
+
+def _wall_back(a: Assembly, part, z0: float = 0.0, x0: float = 0.0, name: str = "back") -> None:
+    """Wall plate (local frame = inner rectangle) with its front face at y = 0."""
+    a.place(part, (x0, 0.0, z0), X, Z, Y, name=name)
+
+
+@placement("WallHook")
+def wall_hook(a: Assembly) -> None:
+    """Two hook profiles left and right of a flanged back plate, joined by a bottom plate and
+    a plate across the hook's tip."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    w, ht, hid = b.width, b.hook_thickness, b.hook_inside_diameter
+    tl = hid + 2 * ht
+    orad = hid / 2 + ht
+    sides = _helper(p, "free")
+    for x0 in (-t, w):
+        _wall_side(a, sides.first(), x0)
+    _wall_back(a, _helper(p, "flangedWall").first(), z0=10.0)  # bottom flange 10
+    rects = _helper(p, "rectangularWall")
+    tip, bottom = rects[0] if rects else None, rects[1] if len(rects) > 1 else None
+    a.place(bottom, (0.0, t - 10.0, ht / 2 - t / 2), X, neg(Y), Z, name="bottom")
+    a.place(tip, (0.0, t - (tl - ht / 2) + t / 2, orad - ht / 2), X, Z, neg(Y), name="tip")
+
+
+@placement("WallCaliper")
+def wall_caliper(a: Assembly) -> None:
+    """Two side profiles left and right of a flanged back plate."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    sides = _helper(p, "free")
+    for x0 in (-t, b.width):
+        _wall_side(a, sides.first(), x0)
+    _wall_back(a, _helper(p, "flangedWall").first())
+
+
+@placement("WallChiselHolder", "WallSlottedHolder")
+def wall_slotted_holder(a: Assembly) -> None:
+    """Back plate, a top plate with the slots and triangular braces below it, hanging from the
+    top plate (local y downwards) with their wall edge on the back plate."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    n = b.number
+    rects = _helper(p, "rectangularWall")
+    if len(rects) < 2:
+        return
+    back, top = rects[0], rects[1]
+    depth = top.y
+    if hasattr(b, "tool_width"):  # WallSlottedHolder
+        wt = b.tool_width
+        d = min(2 * t, (wt - b.slot_width) / 4.0)
+        xs = [d, n * wt + d] + [i * wt + d for i in range(1, n) if b.brace(i)]
+    else:
+        wt = b.tooldiameter
+        d = min(2 * t, (wt - b.holediameter) / 4.0)
+        xs = [d, n * wt - d] + [i * wt for i in range(1, n) if b.brace(i)]
+    _wall_back(a, back)
+    a.place(top, (0.0, -depth, b.h), X, Y, Z, name="top")
+    for x, tri in zip(xs, _helper(p, "rectangularTriangle")):
+        a.place(tri, (x - t / 2, -depth, b.h), Y, neg(Z), X, name="brace")
+
+
+@placement("WallStairs")
+def wall_stairs(a: Assembly) -> None:
+    """Stepped side profiles (front at local x 0, wall at x = y) carrying one shelf per step
+    and a brace at the wall."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    sy, sh = b.sy, b.sh
+    y = sum(sy)
+    rects = _helper(p, "rectangularWall")
+    for k, (w, z) in enumerate(zip(sy, sh)):
+        if k < len(rects):
+            a.place(rects[k], (0.0, -y + sum(sy[:k]), z), X, Y, Z, name=f"step {k + 1}")
+    if b.braceheight and len(rects) > len(sy):
+        a.place(rects[len(sy)], (0.0, 0.0, 0.0), X, Z, neg(Y), name="brace")
+    for x0 in [-t] + positions(b.sx, t) + [b.x]:
+        a.place(_helper(p, "free").first(), (x0, -y, 0.0), Y, Z, X, name="side")
+
+
+@placement("WallPinRow")
+def wall_pin_row(a: Assembly) -> None:
+    """Side and support profiles hold a back plate (on the wall) and a front plate, both
+    leaning back by angle; the pin plate runs between them at height 2t, pins to the front."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    h, x = b.h, b.x
+    ar = math.radians(b.angle)
+    face = b.edges["a"].margin()
+    up = (0.0, math.sin(ar), math.cos(ar))       # along the plates
+    out = (0.0, -math.cos(ar), math.sin(ar))     # through the plates, away from the wall
+    base = (0.0, -math.sin(ar) * h, 0.0)         # bottom of the back plate's wall side
+    sides = p.where(lambda q: "WallPinRow.sideWall" in q.callers)
+    supports = p.where(lambda q: "WallPinRow.supportWall" in q.callers)
+    for x0 in (-t, x):
+        _wall_side(a, sides.first(), x0, face=face)
+    z0 = 0.0 if b.angle > 0.001 else h / 2  # upright: the supports only hold the front plate
+    for i in range(1, b.hooks - 1):
+        _wall_side(a, supports.first(), i * x / (b.hooks - 1) - t / 2, "support", face, z0)
+    rects = _helper(p, "rectangularWall")
+    if len(rects) < 3:
+        return
+    pins, front, back = rects[0], rects[1], rects[2]
+    a.place(back, base, X, up, out, name="back")
+    a.place(front, add(base, out, 4 * t), X, up, out, name="front")
+    a.place(pins, add(add(base, out, 4 * t), up, 1.5 * t), X, neg(out), up, name="pins")
+
+
+@placement("WallPliersHolder")
+def wall_pliers_holder(a: Assembly) -> None:
+    """Braces (the first two outside the back plate, the others on its holes) carry a front
+    bar at their top front."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    rects = _helper(p, "rectangularWall")
+    if len(rects) < 2:
+        return
+    front, back = rects[0], rects[1]
+    w, d = back.x, b.y
+    face = b.edges["b"].spacing() + t  # braces start at b.spacing()
+    braces = _helper(p, "free")
+    for x0 in (-t, w):
+        _wall_side(a, braces.first(), x0, "brace", face)
+    for c in positions(b.sx, t):
+        _wall_side(a, braces.first(), c - t / 2, "brace", face)
+    _wall_back(a, back)
+    a.place(front, (0.0, -d + t, b.h_t - b.h), X, Z, neg(Y), name="front")
+
+
+@placement("WallRollHolder")
+def wall_roll_holder(a: Assembly) -> None:
+    """Two sides (wall edge B along their local x = height) on a rounded back plate, each
+    braced by a horizontal triangle on its outside. The axle rings stay 2D."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    w, h, ax = b.width, b.height, b.axle
+    m = b.edges["B"].margin()
+    for x0 in (h / 4, h / 4 + t + w):
+        a.place(_helper(p, "free").first(), (x0, m + t, 0.0), Z, neg(Y), X, name="side")
+    _wall_back(a, _helper(p, "roundedPlate").first())
+    zc = h - 3 * t - ax / 2
+    tris = _helper(p, "rectangularTriangle")
+    if len(tris) == 2:
+        a.place(tris[0], (0.0, 0.0, zc - t / 2), X, neg(Y), Z, name="brace")
+        a.place(tris[1], (w + h / 2 + 2 * t, 0.0, zc - t / 2), neg(X), neg(Y), Z, name="brace")
+
+
+@placement("DrillStand", "WallDrillBox")
+def drill_stand(a: Assembly) -> None:
+    """Rows (sy) of compartments (sx) with a bottom sloping down to the right by
+    extra_height; the top of each row is level. Inner walls interlock with slots.
+    World: inner space x [0, x], y [0, y] (front to back), z from the right side's foot."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, sx, sy, sh, eh = b.x, b.y, b.sx, b.sy, b.sh, b.extra_height
+    wall = b.__class__.__name__ == "WallDrillBox"
+    ang = math.atan(eh / x)
+
+    def drawn(func):
+        return p.where(lambda q: f"DrillStand.{func}" in q.callers)
+
+    # Front and back: inner left at local x = edges[3].spacing(), the bottom cut line at the
+    # left at local y = eh + edges[0].margin() (world z = eh).
+    outs = drawn("xOutsideWall")
+    for part, y0, n, edges in ((outs.first(), 0.0, neg(Y), "hFeF"),
+                               (None, y + t, Y, "hCec" if wall else "hfef")):
+        part = part or outs.first()
+        e0, e3 = b.edges[edges[0]], b.edges[edges[3]]
+        a.place(part, (-e3.spacing(), y0 - (t if n == Y else 0.0), -e0.margin()), X, Z, n,
+                name="front" if n != Y else "back")
+    for nr, part in enumerate(drawn("xWall"), start=1):
+        y0 = sum(sy[:nr]) + (nr - 1) * t
+        a.place(part, (-t, y0 + t, t), X, Z, neg(Y), name=f"row wall {nr}")
+    for nr, part in enumerate(drawn("yWall"), start=1):
+        x0 = sum(sx[:nr]) + (nr - 1) * t
+        eh_nr = eh * x0 / x
+        a.place(part, (x0, -t, eh + 2 * t - eh_nr), Y, Z, X, name=f"column wall {nr}")
+    # Sides: the left one stands on a foot of eh + 2t (DrillStand) or 2t, hanging eh higher
+    # (WallDrillBox); the right one on 2t. DrillStand's stackable bottom edge adds feet below.
+    sides = drawn("sideWall")
+    e0 = b.edges["e" if wall else "š"]
+    z_left = 0.0 if not wall else eh
+    a.place(sides.first(), (-t, -t, z_left - e0.spacing()), Y, Z, X, name="left side")
+    a.place(sides.first(), (x, -t, -e0.spacing()), Y, Z, X, name="right side")
+    # Bottom: centred 1.5t (vertically) above the slanted cut line, its left end clipped by
+    # t * tan(angle).
+    d = (math.cos(ang), 0.0, -math.sin(ang))
+    up = (math.sin(ang), 0.0, math.cos(ang))
+    origin = add(add((0.0, 0.0, eh + 1.5 * t), up, -t / 2), d, t * math.tan(ang))
+    a.place(_helper(p, "rectangularWall").first(), origin, d, Y, up, name="bottom")
+
+
 @placement("WallWrenchHolder")
 def wall_wrench_holder(a: Assembly) -> None:
     """Back plate with slots, two sides with the wrench slots at the front."""
@@ -526,6 +736,133 @@ def wall_type_tray(a: Assembly) -> None:
     inner_y = sides if b.all_mounts else rects
     for x0 in positions(b.sx, t):
         f.inner_y(inner_y.first(), x0)
+
+
+@placement("WallStackableBin")
+def wall_stackable_bin(a: Assembly) -> None:
+    """Back plate with the front face at y = 0, the bin reaching to -y. The sides' front
+    profile (j edge) holds a slope tilted forward by angle and an optional upright label
+    panel; the strips under the bottom panel stabilise the bin when stacked."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x = sum(b.sx) + t * (len(b.sx) - 1)
+    back = p.label("back")
+    if back is None:
+        return
+    y, h = p.label("bottom").y, back.y
+    ang = math.radians(b.angle)
+    fh = h * b.front
+    w = fh * math.tan(ang)
+    _wall_back(a, back)
+    a.place(p.label("bottom"), (0.0, 0.0, 0.0), X, neg(Y), neg(Z))
+    # Inner faces on the profile: the slope from the front bottom corner up to (-w, fh),
+    # the label upright above it.
+    up = (0.0, -math.sin(ang), math.cos(ang))
+    a.place(p.label("slope"), (0.0, -y, 0.0), X, up, (0.0, -math.cos(ang), -math.sin(ang)))
+    a.place(p.label("label"), (0.0, -y - w, fh), X, Z, neg(Y))
+    # Sides and dividers are drawn with the front on the left, as seen from +x.
+    stabilizers = p.drawn_by("StackableBaseEdge.__call__")
+    for x0, label in ((-t, "left side"), (x, "right side")):
+        side = p.label(label)
+        a.place(side, (x0, -y, 0.0), Y, Z, X, flip=side.mirrored if side else False)
+        strip = stabilizers.first()
+        if strip is not None:
+            a.place(strip, (t if x0 < 0 else x - t, -y, -t - strip.y), Y, Z, X,
+                    name="stabilizer")
+    for x0 in positions(b.sx, t):
+        a.place(p.label("dividers"), (x0, -y, 0.0), Y, Z, X)
+
+
+@placement("MagazineFile")
+def magazine_file(a: Assembly) -> None:
+    """Back (h) and front (hi) between two sides drawn without move(): their pieces' local
+    frames are their bounding boxes, the outer lines of the F edges, with the back on the
+    left. The second side is drawn turned by 180 degrees."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y = b.x, b.y
+    rects = _helper(p, "rectangularWall")
+    if len(rects) < 3:
+        return
+    back, front, bottom = rects[0], rects[1], rects[2]
+    a.place(back, (x, y, 0.0), neg(X), Z, Y, name="back")
+    a.place(front, (0.0, 0.0, 0.0), X, Z, neg(Y), name="front")
+    a.place(bottom, (0.0, y, 0.0), X, neg(Y), neg(Z), name="bottom")
+    for side in _helper(p, "free").where(lambda q: not q.callers):
+        # Turned, the bottom edge runs along the top: the top right corner is cut (unturned it
+        # is the low front's corner).
+        turned = any(px > side.x - 0.5 and py > side.y - 0.5 for px, py in side.rec["outline"]["outer"])
+        x0, n = (x, X) if turned else (0.0, neg(X))
+        a.place(side, (x0, y + t, -t), neg(Y), Z, n, rot=180 if turned else 0, name="side")
+
+
+@placement("NightLightBox")
+def night_light_box(a: Assembly) -> None:
+    """Box with a window in the front; inside, from the front: wood plates hanging in slots
+    in the sides' tops, the acrylic diffuser, then the electronics compartment under a cover.
+    The plates stand on two rails on the floor. The lid is hinged at the back on top."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    m, bd, dpt, wpt, ips, n = (b.Margin, b.BackgroundDepth, b.DiffuserPlateThickness,
+                               b.WoodPlateThickness, b.InterPlateSpacing, b.WoodPlatesCount)
+    y = bd + dpt + (wpt + ips) * n + ips
+    k = 4 if b.BoxStyle == "minimalist" else 8
+    x = t * k + b.PlateVisibleWidth + m
+    h = b.PlateVisibleHeight + t * k + m
+    sw = b.edges["s"].startWidth()
+    f = a.frame(x, y, h)
+    f.front(p.label("front"))
+    f.back(p.label("back"))
+    # Optional face plate in front of the front wall, held by two pegs through both (in the
+    # two bottom ones of three peg holes, 1.5t in from the corners).
+    face = p.label("customizable face")
+    if face is not None:
+        a.place(face, (0.0, -t, 0.0), X, Z, neg(Y))
+        pegs = p.where(lambda q: q.rec["helper"] == "rectangularWall" and not q.label)
+        for x0 in (t, x - 2 * t):
+            a.place(pegs.first(), (x0, 0.0, t), neg(Y), Z, X, name="peg")
+    # The bottom's rail slots start at its local y = 0, the front.
+    a.place(p.label("bottom"), (0.0, 0.0, 0.0), X, Y, neg(Z))
+    # Sides (left drawn mirrored): front on the left, as seen from +x; the inner floor at sw.
+    for left, x0, nx in ((True, 0.0, neg(X)), (False, x, X)):
+        sides = p.drawn_by("NightLightBox.side").where(lambda q: q.mirrored == left)
+        side = max(sides, key=lambda q: q.x * q.y, default=None)
+        a.place(side, (x0, 0.0, -sw), Y, Z, nx, flip=left, name="left" if left else "right")
+        for scrap in sides:  # the lid's pin outline drawn inside the hinge eye
+            if scrap is not side:
+                a.scrap(scrap)
+    # Rails on the floor (holes centred 1.5t from the sides), the diffuser slot at their back.
+    rail_len = 2 * t + dpt + (ips + wpt) * n
+    back = ips - t - m / 2 + rail_len
+    for x0, nx in ((2 * t, neg(X)), (x - 2 * t, X)):
+        rail = p.drawn_by("NightLightBox.rail").first()
+        a.place(rail, (x0, back, 0.0), neg(Y), Z, nx, flip=rail.mirrored if rail else False,
+                name="rail")
+    # Plates stand on the floor, their bodies M from the sides; centred in their slots.
+    c = y - bd - dpt / 2 - m / 2
+    a.place(p.drawn_by("NightLightBox.diffuserPlate").first(), (m, c + dpt / 2, 0.0),
+            X, Z, neg(Y), name="diffuser", thickness=dpt)
+    for i, plate in enumerate(p.drawn_by("NightLightBox.woodPlate")):
+        ci = ips - m / 2 + wpt / 2 + i * (wpt + ips)
+        # The body starts t + M/2 in; the ears at the top reach into the sides' slots.
+        a.place(plate, (m / 2 - t, ci + wpt / 2, 0.0), X, Z, neg(Y),
+                name=f"wood plate {i + 1}", thickness=wpt)
+    # Guides through the sides' square holes, just in front of the diffuser.
+    gy = y - bd - dpt - t - 1.5 * m
+    gz = b.PlateVisibleHeight + t * (4 if k == 4 else 8) - sw
+    for x0 in (-t, x - t):
+        a.place(p.label("guide"), (x0, gy, gz), X, Z, Y)
+    # Electronics cover: in the sides' top F edge (BD - 5t - M/2 long, ending 5t before the
+    # back), its own f edges 1.5t in from its back edge.
+    fc = y - 5 * t - (bd - 5 * t - m / 2) / 2
+    yb = fc + 1.5 * t + (bd - 5 * t - m) / 2
+    a.place(p.drawn_by("NightLightBox.elecCompartmentTop").first(), (0.0, yb, h - t),
+            X, neg(Y), Z, name="electronics cover")
+    # Lid on top of the walls, between the hinge eyes; its pins at the back.
+    a.place(p.labelled("lid top").first(), (x, 0.0, h), Y, neg(X), Z)
 
 
 @placement("WallHopper")
@@ -734,7 +1071,7 @@ def pen_holder_box(a: Assembly) -> None:
 @placement("ElectronicsBox")
 def electronics_box(a: Assembly) -> None:
     """Walls on a bottom plate (flanged for outside mounts); the top rests on corner
-    triangles (drawn as one part, so 2D only)."""
+    triangles, fingered into the walls just below it."""
     b = a.box
     t = a.t
     p = a.parts
@@ -742,6 +1079,13 @@ def electronics_box(a: Assembly) -> None:
     _outer_walls(a, f, {"Wall 1": "front", "Wall 2": "right", "Wall 3": "back",
                         "Wall 4": "left", "Bottom": "bottom"})
     f.plate(p.label("Top"), b.h - t)
+    # Right angle (local (tr, 0)) in the corner, legs along the walls (a, b point inwards).
+    tr = b.triangle
+    corners = [((0, 0), X, Y), ((b.x, 0), Y, neg(X)), ((b.x, b.y), neg(X), neg(Y)),
+               ((0, b.y), neg(Y), X)]
+    for tri, ((cx, cy), u, v) in zip(_helper(p, "rectangularTriangle"), corners):
+        origin = (cx + u[0] * tr, cy + u[1] * tr, b.h - 2 * t)
+        a.place(tri, origin, neg(u), v, Z, name="corner triangle")
 
 
 @placement("DisplayCase")
@@ -855,3 +1199,221 @@ def sliding_drawer(a: Assembly) -> None:
     d.left(walls.first())
     d.front(front)
     d.bottom(p.label("in box bottom"), rot=90)
+
+
+@placement("FlexBox")
+def flex_box(a: Assembly) -> None:
+    """Two rounded sides (latch at the top left) with a flex wall wrapped around them,
+    starting below the latch and running down, along the bottom, up the back, back over the
+    top to the latch. Middle sides are dividers in the wall's finger holes."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h, l = b.x, b.y, b.h, b.latchsize
+    r = max(b.radius, 0.01)
+    c4 = math.pi * r / 2
+    wall = _helper(p, "free").drawn_by("FlexBox.surroundingWall").first()
+    # The wall's lower edge (0.25 t above its frame) is the left side's outer face.
+    b1 = h - 2 * r - l
+    b2 = b1 + c4 + y - 2 * r
+    b3 = b2 + c4 + h - 2 * r
+    b4 = b3 + c4 + y - 2 * r
+    a.place(wall, (-1.25 * t, 0.0, h - r - l), neg(Z), X, neg(Y), name="flex wall",
+            bend=[(x0, 90, r) for x0 in (b1, b2, b3, b4)])
+    sides = list(_helper(p, "free").drawn_by("FlexBox.flexBoxSide"))
+    if len(sides) < 2:
+        return
+    # Side frames are their move boxes: the rounded outline starts t in.
+    a.place(sides[0], (x, -t, -t), Y, Z, X, name="right side")
+    a.place(sides[-1], (0.0, -t, -t), Y, Z, neg(X), flip=sides[-1].mirrored, name="left side")
+    # The wall's finger holes (upstream) sit one thickness before the compartment ends.
+    for div, x0 in zip(sides[1:-1], positions(b.sx, t)):
+        a.place(div, (x0 - t, -t, -t), Y, Z, X, name="divider")
+
+
+def _flex_sides(a: Assembly, func: str, x: float) -> None:
+    """Rounded sides drawn by func, frames are their move boxes with the outline t in: the
+    first (unmirrored) on the right, the mirrored one on the left."""
+    t = a.t
+    sides = list(_helper(a.parts, "free").drawn_by(func))
+    if len(sides) < 2:
+        return
+    a.place(sides[0], (x, -t, -t), Y, Z, X, name="right side")
+    a.place(sides[-1], (0.0, -t, -t), Y, Z, neg(X), flip=sides[-1].mirrored, name="left side")
+
+
+@placement("FlexBox2", "FlexBox4")
+def flex_box2(a: Assembly) -> None:
+    """Flex wall from the bottom of the back up, over the rounded top and down the front:
+    to the latch (FlexBox2, with a front wall below) or all the way (FlexBox4)."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h = b.x, b.y, b.h
+    r = max(b.radius, 0.01)
+    c4 = math.pi * r / 2
+    wall = _helper(p, "free").drawn_by("surroundingWall").first()
+    # Starts t in (its end fingers go into the bottom), lower edge 0.25 t in: the left side's
+    # outer face.
+    a.place(wall, (-1.25 * t, y, -t), Z, X, Y, name="flex wall",
+            bend=[(t + h - r, 90, r), (t + h - r + c4 + y - 2 * r, 90, r)])
+    _flex_sides(a, "flexBoxSide", x)
+    rects = _helper(p, "rectangularWall")
+    # The bottom is drawn y by x; FlexBox4's open edge is at the front (under the latch).
+    a.place(rects.first(), (x, y, 0.0), neg(Y), neg(X), neg(Z), name="bottom")
+    a.place(rects.first(), (0.0, 0.0, 0.0), X, Z, neg(Y), name="front")
+
+
+@placement("FlexBox5")
+def flex_box5(a: Assembly) -> None:
+    """Pill shaped box standing on one of its two sides (top and bottom here) with the
+    flex wall around them, starting after the latch."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    h, l, ls = b.h, b.l, b.latchsize
+    r1, r2 = b.top_diameter / 2, b.bottom_diameter / 2
+    th = math.radians(180 + 2 * b.a)
+    # Side outline (in its move box): along y = t from (r2, t), around r1, latch, back.
+    px, py = r2 + l, t + r1
+    px, py = px + r1 * math.sin(th) + ls * math.cos(th), py - r1 * math.cos(th) + ls * math.sin(th)
+    u = (math.cos(th), math.sin(th), 0.0)
+    n = (math.sin(th), -math.cos(th), 0.0)
+    wall = _helper(p, "free").drawn_by("surroundingWall").first()
+    a.place(wall, (px, py, -1.25 * t), u, Z, n, name="flex wall",
+            bend=[(l - ls, 180 - 2 * b.a, r2), (l - ls + math.radians(180 - 2 * b.a) * r2 + l, 180 + 2 * b.a, r1)])
+    sides = list(_helper(p, "free").drawn_by("flexBoxSide"))
+    if len(sides) < 2:
+        return
+    a.place(sides[0], (0.0, 0.0, h), X, Y, Z, name="top")
+    a.place(sides[-1], (0.0, 0.0, 0.0), X, Y, neg(Z), flip=sides[-1].mirrored, name="bottom")
+
+
+@placement("UBox")
+def u_box(a: Assembly) -> None:
+    """Two U shaped sides with the flex wall around them from the front top, down, along the
+    bottom and up the back; lids from _TopEdge."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h = b.x, b.y, b.h
+    r = max(b.radius, 0.01)
+    cl = math.pi * r / 2
+    wall = p.label("wall")
+    if wall is not None:
+        # Starts after the front top edge's spacing; the F edges' outer lines are the sides'
+        # outer faces.
+        back = b.topEdges(b.top_edge)[1]
+        e0 = b.edges.get(back, back).spacing()
+        a.place(wall, (-t, 0.0, h + e0), neg(Z), X, neg(Y), name="flex wall",
+                bend=[(e0 + h - r, 90, r), (e0 + h - r + cl + y - 2 * r, 90, r)])
+    w = b.edges["f"].spacing()
+    # The U is symmetric front to back: the left one is turned to be seen from outside.
+    a.place(p.label("left"), (0.0, y + w, -w), neg(Y), Z, neg(X))
+    a.place(p.label("right"), (x, -w, -w), Y, Z, X)
+    place_lids(a, a.frame(x, y, h), b.top_edge)
+
+
+def _surrounding_wall(a: Assembly, origin, x: float, y: float, r: float, pieces: int,
+                      left="D", right="d") -> None:
+    """Boxes.surroundingWall(x, y, r, ..., pieces) around a roundedPlate(x, y, r) whose top
+    face's corner is at origin; the wall's lower edge line is t below. It starts in the middle
+    of the front and runs counter-clockwise. The pieces share the move box frame."""
+    b = a.box
+    t = a.t
+    walls = list(_helper(a.parts, "free").drawn_by("Boxes.surroundingWall"))
+    if not walls:
+        return
+    left, right = b.edges.get(left, left), b.edges.get(right, right)
+    c4 = (r + b.burn) * math.pi * 0.5 / b.edges["X"].settings.stretch
+    angle = 90
+    if pieces <= 2 and y - 2 * r < 1e-3:
+        c4 *= 2
+        angle = 180
+        sides = (x / 2 - r, x - 2 * r, x - 2 * r)
+        pieces += 1
+    else:
+        sides = (x / 2 - r, y - 2 * r, x - 2 * r, y - 2 * r, x - 2 * r)
+    rr = max(r, 0.01)
+    stretch = rr * math.radians(angle) / c4 if c4 > 1e-6 else 1.0
+    # Path position s, sheet x of each piece's start minus its path start.
+    s, start, piece_s = 0.0, left.spacing(), 0.0
+    starts, offsets, ends, bends = [start], [start], [], []
+    for nr, l in enumerate(sides):
+        if b._splitWall(pieces, nr) and nr > 0:
+            s += l / 2
+            ends.append(start + s - piece_s)
+            if nr == len(sides) - 1:
+                break
+            start += s - piece_s + right.margin() + left.margin() + b.spacing
+            piece_s = s
+            starts.append(start)
+            offsets.append(start - s)
+            s += l / 2
+        else:
+            s += l
+        bends.append((s, angle, rr, stretch))
+        s += c4
+    if len(ends) < len(offsets):
+        ends.append(start + s - piece_s)
+    for wall in walls:
+        xs = [q[0] for q in wall.rec["outline"]["outer"]]
+        mid = (min(xs) + max(xs)) / 2
+        k = min(range(len(starts)), key=lambda i: abs(mid - (starts[i] + ends[i]) / 2))
+        o = offsets[k]  # sheet x - path position
+        a.place(wall, add(add(origin, X, x / 2 - o), Z, -t), X, Z, neg(Y), name="wall",
+                bend=[(s0 + o, *rest) for s0, *rest in bends])
+
+
+@placement("RoundedBox")
+def rounded_box(a: Assembly) -> None:
+    """Rounded plates (bottom, floors in the wall's finger holes, top, optional lid) with the
+    flex wall around them."""
+    b = a.box
+    t = a.t
+    x, y, r = b.x, b.y, b.radius
+    plates = list(_helper(a.parts, "roundedPlate"))
+    zs = [-t]
+    for dh in b.sh[:-1]:
+        zs.append(zs[-1] + t + dh)
+    zs.append(sum(b.sh) + t * (len(b.sh) - 1))
+    names = ["bottom"] + ["floor"] * (len(b.sh) - 1) + ["top"]
+    for plate, z, name in zip(plates, zs, names):
+        a.place(plate, (0.0, 0.0, z), X, Y, Z, name=name)
+    if len(plates) > len(zs):
+        re = b.edges[b.edge_style].spacing()
+        a.place(plates[len(zs)], (-re, -re, zs[-1] + t), X, Y, Z, name="lid")
+    _surrounding_wall(a, (0.0, 0.0, 0.0), x, y, r, b.wallpieces)
+
+
+@placement("FlexBox3")
+def flex_box3(a: Assembly) -> None:
+    """Flex wall up the back, around the top back edge into the lid top, which is wider by
+    the clearance d each side; lid sides and a front lip hang from it over the box."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, z, h, d = b.x, b.y, b.z, b.h, b.d
+    r = max(b.radius, 0.01)
+    wall = _helper(p, "free").drawn_by("FlexBox3.surroundingWall").first()
+    # Its flex is 0.95 of the quarter circle; the lower edge is d + t in: the left side's
+    # outer face.
+    a.place(wall, (-d - 2 * t, y, -t), Z, X, Y, name="flex wall", bend=[(t + z - r, 90, r, 1 / 0.95)])
+    _flex_sides(a, "FlexBox3.flexBoxSide", x)
+    rects = _helper(p, "rectangularWall")
+    bottom, lip, front = (list(rects) + [None] * 3)[:3]
+    a.place(bottom, (x, y, 0.0), neg(Y), neg(X), neg(Z), name="bottom")
+    a.place(lip, (-d - t, -t, z), neg(Z), X, neg(Y), name="lid front")
+    a.place(front, (0.0, 0.0, 0.0), X, Z, neg(Y), name="front")
+    if r < h:
+        base_l = y + 2 * t
+    else:
+        ang = math.acos((r - h) / (r + t))
+        base_l = y + (r + t) * math.sin(ang) - r + t
+    # Lid sides: their top line (h + t up) is the lid top's upper face, the lip's outer face
+    # at base_l.
+    lid_sides = list(_helper(p, "free").drawn_by("FlexBox3.lidSide"))
+    if len(lid_sides) >= 2:
+        a.place(lid_sides[0], (x + t + d, base_l - t, z - h), Z, neg(Y), X, name="lid right")
+        a.place(lid_sides[-1], (-d - t, base_l - t, z - h), Z, neg(Y), neg(X),
+                flip=lid_sides[-1].mirrored, name="lid left")

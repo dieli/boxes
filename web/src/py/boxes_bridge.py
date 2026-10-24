@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import html
 import inspect
+from types import SimpleNamespace
 import json
 import math
 import re
@@ -141,6 +142,7 @@ class _Recorder:
         self.pending: dict | None = None
         self.surface = None
         self.sheet = None
+        self.ignored: set[int] = set()  # SVG parts that are not parts (reference bar)
 
 
 _recorder: _Recorder | None = None
@@ -155,6 +157,8 @@ def _edge_info(box, e) -> dict:
         "endWidth": e.endWidth(),
         "margin": e.margin(),
         "spacing": e.spacing(),
+        # Finger joints between parts at another angle (settings.angle, 90 is square).
+        "angle": getattr(getattr(e, "settings", None), "angle", None),
     }
 
 
@@ -197,6 +201,11 @@ def _wrap_wall_helper(helper: str, describe):
             "params": d.get("params", {}),
             "_offset": d["offset"],
             "_probe": d.get("probe", (d["x"] / 2, d["y"] / 2)),
+            "_multi": d.get("multi", False),
+            # Number of SVG parts and of paths in the last one when the helper returns, shared
+            # by all copies of a multi part: a nested move() (e.g. stackable feet drawing their
+            # stabilizer) splits the cuts. Later free drawing may go into that last part too.
+            "_end": (end := [0, 0]),
         }
         for i, char in d.get("chars", {}).items():
             entry["edges"][i]["char"] = char
@@ -205,6 +214,8 @@ def _wrap_wall_helper(helper: str, describe):
             return orig(self, *args, **kwargs)
         finally:
             rec.pending = outer
+            parts = self.ctx._dwg.parts
+            end[:] = [len(parts), len(parts[-1].pathes) if parts else 0]
 
     setattr(boxes.Boxes, helper, wrapper)
 
@@ -235,15 +246,15 @@ def _describe_trapezoid(box, a):
 
 
 def _describe_triangle(box, a):
-    if a["num"] != 1:
-        return None  # several triangles in one part
+    # With num > 1 all triangles share one SVG part; each calls cc(callback, 0) in its own
+    # frame and is recorded as a part of its own.
     x, y = a["x"], a["y"]
     edges = [box.edges.get(e, e) for e in a["edges"]]
     if len(edges) == 2:
         edges.append(box.edges["e"])
     # Inner shape: (0,0)-(x,0)-(x,y); edge 2 is the hypotenuse.
     return {"x": x, "y": y, "edges": edges, "offset": (0.0, edges[0].startWidth()),
-            "probe": (2 * x / 3, y / 3), "params": {"r": a["r"]}}
+            "probe": (2 * x / 3, y / 3), "params": {"r": a["r"]}, "multi": a["num"] > 1}
 
 
 def _describe_flanged(box, a):
@@ -307,12 +318,40 @@ def _cc(self, callback, number, *args, **kwargs):
     rec = _recorder
     # The wall helpers call cc(callback, 0, ...) at the start of the bottom edge's cut line,
     # callback or not. render_with_parts() shifts this to the local frame ("_offset").
-    if rec is not None and rec.pending is not None and number == 0 and "matrix" not in rec.pending:
-        rec.pending["matrix"] = tuple(self.ctx._m)[:6]
-        rec.pending["_part"] = self.ctx._dwg._p
+    if rec is not None and rec.pending is not None and number == 0 and (
+            "matrix" not in rec.pending or rec.pending["_multi"]):
+        entry = rec.pending if "matrix" not in rec.pending else {
+            **rec.pending, "edges": [dict(e) for e in rec.pending["edges"]]}
+        entry["matrix"] = tuple(self.ctx._m)[:6]
+        entry["_part"] = self.ctx._dwg._p
         rec.surface = self.ctx._dwg
-        rec.walls.append(rec.pending)
+        rec.walls.append(entry)
     return _orig_cc(self, callback, number, *args, **kwargs)
+
+
+_orig_move = boxes.Boxes.move
+
+
+def _move(self, x, y, where, before=False, label=""):
+    """Records parts drawn by hand (between move(..., before=True) and move(...)) without a
+    recorded wall helper, e.g. the side profiles of the wall mounted generators. Their local
+    frame is the move box [0, x] x [0, y]; they have no edge info, placements go by outline."""
+    rec = _recorder
+    skip = _orig_move(self, x, y, where, before, label)
+    if rec is None or not before or skip or rec.pending is not None:
+        return skip
+    callers = _callers(sys._getframe(1))
+    if any(c.endswith("Boxes.open") for c in callers):  # reference bar
+        rec.ignored.add(id(self.ctx._dwg._p))
+        return skip
+    rec.surface = self.ctx._dwg
+    rec.walls.append({
+        "helper": "free", "x": float(x), "y": float(y), "edges": [], "label": label or "",
+        "move": where or "", "callers": callers, "params": {},
+        "matrix": tuple(self.ctx._m)[:6], "_part": self.ctx._dwg._p,
+        "_offset": (0.0, 0.0), "_probe": None, "_multi": False, "_free": True,
+    })
+    return skip
 
 
 _orig_surface_transform = Surface.transform
@@ -334,6 +373,7 @@ _wrap_wall_helper("roundedPlate", _describe_rounded_plate)
 _wrap_wall_helper("regularPolygonWall", _describe_regular_polygon)
 _wrap_wall_helper("polygonWall", _describe_polygon_wall)
 boxes.Boxes.cc = _cc
+boxes.Boxes.move = _move
 Surface.transform = _surface_transform
 
 
@@ -343,6 +383,11 @@ _CUT_COLORS = (Color.OUTER_CUT, Color.INNER_CUT)
 _CURVE_STEPS = 8
 # inner_corners="loop" (the default) adds tiny loops at inner corners; they are not holes.
 _MIN_HOLE_AREA = 0.5  # mm²
+
+
+# Outlines whose ends are this close count as closed (mm); render_with_parts adds the burn:
+# burn compensation can shift a path's start (by up to burn * sqrt(2)) but not its end.
+_close_tol = 0.05
 
 
 def _polylines(part, to_local: Affine) -> list[list[tuple[float, float]]]:
@@ -375,7 +420,11 @@ def _polylines(part, to_local: Affine) -> list[list[tuple[float, float]]]:
             lines.append(cur)
     # Plain arithmetic: Affine.__mul__ per point dominates the runtime otherwise.
     a, b, c, d, e, f = tuple(to_local)[:6]
-    return [[(round(a * x + b * y + c, 3), round(d * x + e * y + f, 3)) for x, y in line] for line in lines]
+    out = [[(round(a * x + b * y + c, 3), round(d * x + e * y + f, 3)) for x, y in line] for line in lines]
+    for line in out:
+        if len(line) > 3 and line[0] != line[-1] and math.dist(line[0], line[-1]) < _close_tol:
+            line[-1] = line[0]
+    return out
 
 
 def _area(ring) -> float:
@@ -421,7 +470,8 @@ def _outline_shapely(lines, probe=None, min_area: float = 0.0) -> dict | None:
         return None
     # The polygonizer gives the material face with the inner cuts as interior rings.
     around = [f for f in faces if Polygon(f.exterior).contains(Point(probe))] if probe else []
-    shape = max(around or faces, key=lambda f: f.area)
+    # By the area inside the outline: a large cut-out is a face too.
+    shape = max(around or faces, key=lambda f: Polygon(f.exterior).area)
     if not around and Polygon(shape.exterior).area < min_area:
         return None
     return {
@@ -430,6 +480,54 @@ def _outline_shapely(lines, probe=None, min_area: float = 0.0) -> dict | None:
                   for ring in shape.interiors if Polygon(ring).area >= _MIN_HOLE_AREA],
     }
 
+
+def _pieces(part, to_local: Affine) -> list[dict]:
+    """All separate pieces cut in a part (outer contour and holes each), e.g. a set of hinge
+    eyes drawn as one part. Rings nested an even number of times are outlines."""
+    lines = _polylines(part, to_local)
+    if lines and all(l[0] == l[-1] and len(l) > 3 for l in lines):
+        rings = [l[:-1] for l in lines]
+    else:
+        faces = list(polygonize(unary_union([LineString(l) for l in lines]))) if lines else []
+        rings = [list(f.exterior.coords[:-1]) for f in faces]
+    rings = [r for r in rings if abs(_area(r)) >= _MIN_HOLE_AREA]
+    rings.sort(key=lambda r: abs(_area(r)), reverse=True)
+    pieces = []
+    for i, r in enumerate(rings):
+        parents = [q for q in rings[:i] if _inside(*r[0], q)]
+        if len(parents) % 2 == 0:
+            pieces.append({"outer": [list(p) for p in r], "holes": [], "_depth": len(parents)})
+        else:  # a hole of the innermost enclosing piece
+            host = next(pc for pc in reversed(pieces) if _inside(*r[0], pc["outer"]))
+            host["holes"].append([list(p) for p in r])
+    for pc in pieces:
+        del pc["_depth"]
+    return pieces
+
+
+def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int]) -> list[dict]:
+    """Pieces in SVG parts drawn without move() or a wall helper (e.g. MagazineFile's sides).
+    Each one's local frame is its bounding box on the sheet, unrotated."""
+    if rec.surface is None or rec.sheet is None:
+        return []
+    out = []
+    for i, part in enumerate(rec.surface.parts):
+        if id(part) in wall_parts or id(part) in rec.ignored:
+            continue
+        if id(part) in consumed:  # partly merged into a wall: only what was drawn later
+            part = SimpleNamespace(pathes=part.pathes[consumed[id(part)]:])
+        for piece in _pieces(part, ~rec.sheet):
+            minx, miny, maxx, maxy = _poly_bbox(piece["outer"])
+            shift = lambda ring: [[px - minx, py - miny] for px, py in ring]
+            out.append({
+                "helper": "free", "x": maxx - minx, "y": maxy - miny, "edges": [], "label": "",
+                "move": "", "callers": [], "params": {},
+                "matrix": tuple(rec.sheet * Affine.translation(minx, miny))[:6],
+                "part": i, "mirrored": False,
+                "outline": {**piece, "outer": shift(piece["outer"]),
+                            "holes": [shift(h) for h in piece["holes"]]},
+            })
+    return out
 
 
 def render_with_parts(name: str, args_json: str) -> str:
@@ -444,9 +542,15 @@ def render_with_parts(name: str, args_json: str) -> str:
         box, svg = _render_box(name, args_json)
     finally:
         _recorder = None
+    global _close_tol
+    _close_tol = 0.05 + 2 * abs(box.burn)
     parts = []
+    helper_parts = {id(w["_part"]) for w in rec.walls if not w.get("_free")}
+    wall_parts = {id(w["_part"]) for w in rec.walls}
+    consumed: dict[int, int] = {}  # id(SVG part) -> leading paths merged into a wall
     for w in rec.walls:
         part = w.pop("_part")
+        end, end_paths = w.pop("_end", [0, 0])
         drawn = Affine(*w["matrix"])
         local = drawn * Affine.translation(*w.pop("_offset"))
         sheet = rec.sheet * local if rec.sheet is not None else local
@@ -456,8 +560,27 @@ def render_with_parts(name: str, args_json: str) -> str:
         # mount it; placements treat that as a reflection in local x, which keeps every edge
         # in its role (a y reflection is the same plus a 180 degree turn).
         w["mirrored"] = drawn.determinant < 0
+        w.pop("_multi")
+        if w.pop("_free", False):
+            w.pop("_probe")
+            if id(part) in helper_parts:
+                continue  # a wall helper drew into the same SVG part
+            for outline in _pieces(part, ~sheet):  # each closed piece is a part of its own
+                parts.append({**w, "outline": outline})
+            continue
+        # Cuts that went into later SVG parts (after a nested helper's move()) belong here too.
+        later = [q for q in rec.surface.parts[w["part"] + 1:end] if id(q) not in wall_parts]
+        if later:
+            paths = list(part.pathes)
+            for q in later:
+                # Of the part current when the helper returned, only the paths drawn so far.
+                n = end_paths if q is rec.surface.parts[end - 1] else len(q.pathes)
+                paths += q.pathes[:n]
+                consumed[id(q)] = max(consumed.get(id(q), 0), n)
+            part = SimpleNamespace(pathes=paths)
         w["outline"] = _outline(part, ~sheet, w.pop("_probe"), 0.2 * w["x"] * w["y"])
         parts.append(w)
+    parts += _unrecorded(rec, wall_parts, consumed)
     try:
         placements = assemble(name, box, parts)
         assembly = placements is not None
@@ -465,4 +588,5 @@ def render_with_parts(name: str, args_json: str) -> str:
         placements, assembly = None, f"{type(e).__name__}: {e}"
     for i, w in enumerate(parts):
         w["place"] = placements.get(i) if placements else None
+    parts = [w for w in parts if not (w["place"] or {}).get("scrap")]
     return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "thickness": box.thickness})

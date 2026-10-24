@@ -36,6 +36,8 @@ export interface EdgeInfo {
   endWidth: number;
   margin: number;
   spacing: number;
+  /** Joint angle of finger joints (90 is square); null for other edges. */
+  angle: number | null;
 }
 
 /** [x, y] in a wall's local frame (mm). */
@@ -69,6 +71,13 @@ export interface RecordedPart {
 export type Vec3 = [number, number, number];
 
 /**
+ * A bend of a flex part: from local x = x0 it follows an arc of radius r (at its face z = 0)
+ * through angle degrees, turning towards -n for positive angles. The flex stretches by the
+ * optional factor (arc length / length of the part used), 1 if absent.
+ */
+export type Bend = [x0: number, angle: number, r: number, stretch?: number];
+
+/**
  * World frame (mm, Z up): local (x, y) -> origin + x*ux + y*uy, material extruded from
  * that face along n by the thickness. Computed in Python (src/py/placements.py).
  */
@@ -79,6 +88,10 @@ export interface Placement {
   n: Vec3;
   /** Name from the placement (e.g. "lid front"), shown for parts without a label. */
   name: string;
+  /** Thickness of parts made of other material; the box's thickness if absent. */
+  t?: number;
+  /** Flex parts: bends along local x (see bend.ts). */
+  bend?: Bend[];
 }
 
 /** true: generator has a placement map; string: it failed (error message); false: none. */

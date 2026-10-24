@@ -5,6 +5,8 @@ outside the part's inner rectangle (where its fingers and the gaps between them 
 at mid thickness:
   - gap points (not in the part) should be filled by another part  -> "fill"
   - finger points (in the part) should not be inside another part   -> "overlap"
+Finger holes (holes about t wide) must be filled by another part as well, which also covers
+parts drawn by hand without edge info ("free" parts).
 Additionally a coarse grid over each part checks for parts cutting into each other.
 
 Run from the repo root (CPython, needs numpy and shapely):
@@ -51,6 +53,38 @@ CASES: dict[str, list[dict]] = {
     "WallHopper": [{"sx": "40:80:30"}, {"label": "0"}, {"slope_angle": "10", "h": "120"}],
     "WallConsole": [{"sx": "40:80:30"}, {"top_depth": "30", "bottom_depth": "60"},
                     {"walltype": "slatwall"}],
+    "WallHook": [{"width": "30", "hook_inside_diameter": "30", "hook_thickness": "15"}],
+    "WallCaliper": [{"width": "25", "height": "10"}],
+    "WallChiselHolder": [{"holediameter": "20"}, {"holediameter": "20", "hooks": "odds"},
+                         {"number": "5", "tooldiameter": "40"}],
+    "WallSlottedHolder": [{"hooks": "everythird"}, {"slot_depth": "60"}],
+    "WallStairs": [{"sx": "60:90:40", "sy": "30:50:40", "sh": "20:60:150"}, {"braceheight": "0"}],
+    "WallPinRow": [{"angle": "0"}, {"angle": "35", "hooks": "4"}, {"h": "80", "pins": "5"},
+                   {"walltype": "slatwall"}],
+    "WallPliersHolder": [{"sx": "60:100:80", "angle": "30"}, {"outside": "0"}],
+    "WallRollHolder": [{"width": "200", "diameter": "100", "height": "120", "axle": "30"}],
+    # sh must increase front to back (the inner walls are as high as the row behind them).
+    "DrillStand": [{"sx": "25*3", "sy": "10:20", "sh": "25:40"}, {"extra_height": "0"},
+                   {"sx": "20:40:30", "sy": "30:15:20:25", "sh": "20:30:30:70"}],
+    "WallDrillBox": [{"sx": "25*3", "sy": "10:20", "sh": "25:40"}, {"extra_height": "30"},
+                     {"sx": "20:40:30", "sy": "30:15:20:25", "sh": "20:30:30:70"}],
+    "MagazineFile": [{"x": "80", "y": "150", "h": "120", "hi": "100"}, {"h": "200", "hi": "40"},
+                     {"top_edge": "G"}],
+    "FlexBox2": [{"y": "40", "radius": "25"}, {"h": "50", "latchsize": "3"}],
+    "FlexBox4": [{"y": "40", "radius": "25"}, {"h": "50", "latchsize": "3"}],
+    "FlexBox5": [{"top_diameter": "40", "bottom_diameter": "70"}, {"top_diameter": "80", "x": "100"}],
+    "UBox": [{"top_edge": "f"}, {"top_edge": "i"}, {"top_edge": "k"}, {"y": "40", "radius": "25"}, {"top_edge": "L"}],
+    "RoundedBox": [{"wallpieces": "2"}, {"wallpieces": "3", "sh": "40:50"}, {"wallpieces": "4", "top": "lid"},
+                   {"edge_style": "F"}, {"edge_style": "h"}, {"y": "30", "radius": "15"},
+                   {"x": "150", "y": "60", "radius": "20", "top": "closed"}],
+    "FlexBox3": [{"h": "20", "radius": "10"}, {"h": "8", "radius": "20"}, {"c": "3"}],
+    "FlexBox": [{"sx": "40:60:30"}, {"y": "40", "radius": "25"}, {"h": "40", "latchsize": "3"},
+                {"sx": "50:50", "outside": "0"}],
+    "NightLightBox": [{"BoxStyle": "minimalist"}, {"BoxStyle": "extra customizable face"},
+                      {"WoodPlatesCount": "1", "WoodPlateThickness": "3", "InterPlateSpacing": "20"},
+                      {"hooks": "1", "Margin": "1"}],
+    "WallStackableBin": [{"sx": "40:60:30", "angle": "45"}, {"label": "0"},
+                         {"Stackable_bottom_stabilizers": "0", "front": "0.5"}, {"walltype": "slatwall"}],
     "WallWrenchHolder": [{"x": "150", "depth": "50"}],
     "WallPlaneHolder": [{"length": "200", "hold_length": "50"}],
     "WallTypeTray": [{"sx": "30:50", "sy": "20:40:30"}, {"back_height": "30"},
@@ -76,11 +110,87 @@ CASES: dict[str, list[dict]] = {
     "BeeQueenTransportBox": [{"bottom_edge": "F"}, {"sh": "12:30:40"}],
 }
 
+# Problems that come from upstream's design, per generator and BoxStyle-like argument value.
+EXPECTED = {
+    # Front and face have three peg holes, but only two pegs are drawn.
+    ("NightLightBox", "extra customizable face"): ("front finger hole", "customizable face finger hole"),
+}
+
+# Generators whose default arguments are degenerate upstream; only CASES are checked.
+SKIP_DEFAULTS = {
+    # holediameter == tooldiameter: the tool holes meet at the braces, which then sit on the
+    # plate's edges and in the holes (d = min(2t, (wt - rt) / 4) = 0).
+    "WallChiselHolder": "braces have no plate to sit on with the default sizes",
+}
+
 FILL_MIN = 0.9
 OVERLAP_MAX = 0.05
 FINGER_EDGES = set("fFhH")
+# Generators may define finger joints under other chars (FlexBox3's g/G); square ones only.
+FINGER_TYPES = {"FingerJointEdge", "FingerJointEdgeCounterPart", "FingerHoleEdge"}
 # Wall mount joints (b/B fingers, c/C slots) are plain finger joints with the plain wall type.
 WALL_EDGES = set("bBcC")
+
+
+class BendPath:
+    """Exact model of a flex part's bend path (Placement.bend, mirrors web/src/bend.ts)."""
+
+    def __init__(self, bends) -> None:
+        # Pieces: (x0, x1, k, P, T) with k = 0 for straight pieces; N = (-T[1], T[0]).
+        self.pieces = []
+        P, T, x = np.zeros(2), np.array([1.0, 0.0]), 0.0
+        # Arcs: k is the turn per part length, the radius 1/|k| * s (s: stretch).
+        for x0, angle, r, *s in sorted(bends):
+            s = s[0] if s else 1.0
+            P = self._straight(x, x0, P, T)
+            k, x1 = np.sign(angle) * s / r, x0 + r * np.radians(abs(angle)) / s
+            self.pieces.append((x0, x1, k, P, T, s))
+            P, T = self._arc(P, T, k, s, x1 - x0)
+            x = x1
+        self.pieces.append((x, np.inf, 0.0, P, T, 1.0))
+
+    def _straight(self, x0, x1, P, T):
+        if x1 > x0:
+            self.pieces.append((x0, x1, 0.0, P, T, 1.0))
+        return P + T * (x1 - x0)
+
+    @staticmethod
+    def _arc(P, T, k, st, l):
+        N = np.array([-T[1], T[0]])
+        c, s = np.cos(k * l), np.sin(k * l)
+        return P + (T * s + N * (c - 1)) * st / k, T * c - N * s
+
+    def map(self, x, z):
+        """(x, z) -> bent (x, z) for arrays; x before 0 extends the first piece."""
+        out = np.zeros((len(x), 2))
+        for i, (x0, x1, k, P, T, st) in enumerate(self.pieces):
+            sel = (x >= x0 if i else np.ones(len(x), bool)) & (x < x1)
+            l = x[sel] - x0
+            if k == 0:
+                Pl, Tl = P + np.outer(l, T), np.tile(T, (len(l), 1))
+            else:
+                N = np.array([-T[1], T[0]])
+                c, s = np.cos(k * l)[:, None], np.sin(k * l)[:, None]
+                Pl, Tl = P + (T * s + N * (c - 1)) * st / k, T * c - N * s
+            Nl = np.column_stack([-Tl[:, 1], Tl[:, 0]])
+            out[sel] = Pl + Nl * z[sel, None]
+        return out
+
+    def inverse(self, X, Z, t):
+        """Bent (X, Z) -> list of candidate unbent (x, z, valid) per piece."""
+        d0 = np.column_stack([X, Z])
+        for x0, x1, k, P, T, st in self.pieces:
+            N = np.array([-T[1], T[0]])
+            if k == 0:
+                d = d0 - P
+                l, z = d @ T, d @ N
+            else:
+                d = d0 - (P - N * st / k)
+                s = np.sign(k) * np.hypot(d[:, 0], d[:, 1])
+                z = s - st / k
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    l = np.arctan2((d @ T) / s, (d @ N) / s) / k
+            yield x0 + l, z, (l >= -1e-6) & (x0 + l <= x1 + 1e-6)
 
 
 class Solid:
@@ -93,16 +203,28 @@ class Solid:
         self.o = np.array(p["origin"], float)
         self.R = np.column_stack([p["ux"], p["uy"], p["n"]]).astype(float)
         self.Rinv = np.linalg.inv(self.R)
-        self.t = t
+        self.t = p.get("t", t)
+        self.bend = BendPath(p["bend"]) if p.get("bend") else None
 
     def world(self, x, y, z):
+        x, y, z = (np.asarray(c, float) for c in (x, y, z))
+        if self.bend is not None:
+            b = self.bend.map(x, z)
+            x, z = b[:, 0], b[:, 1]
         return self.o + np.column_stack([x, y, z]) @ self.R.T
 
     def contains(self, w) -> np.ndarray:
         local = (w - self.o) @ self.Rinv.T
         eps = 0.05 * self.t
-        inz = (local[:, 2] > eps) & (local[:, 2] < self.t - eps)
-        return inz & contains_xy(self.poly, local[:, 0], local[:, 1])
+        if self.bend is None:
+            inz = (local[:, 2] > eps) & (local[:, 2] < self.t - eps)
+            return inz & contains_xy(self.poly, local[:, 0], local[:, 1])
+        out = np.zeros(len(w), bool)
+        for x, z, ok in self.bend.inverse(local[:, 0], local[:, 2], self.t):
+            ok = ok & (z > eps) & (z < self.t - eps)
+            if ok.any():
+                out[ok] |= contains_xy(self.poly, x[ok], local[ok, 1])
+        return out
 
 
 def segments(rec: dict) -> list[tuple[np.ndarray, np.ndarray, float]]:
@@ -133,6 +255,25 @@ def edge_band(s: Solid, i: int, step: float = 0.25):
     return pts[:, 0], pts[:, 1]
 
 
+def finger_hole(hole, t: float):
+    """Sample points along the middle of an axis-aligned rectangular hole about t wide."""
+    if len(hole) > 6:  # rounded slot (air holes etc.)
+        return None
+    xs, ys = [q[0] for q in hole], [q[1] for q in hole]
+    w, h = max(xs) - min(xs), max(ys) - min(ys)
+    if abs(min(w, h) - t) > 0.15 * t or max(w, h) < 0.9 * t:
+        return None
+    if abs(Polygon(hole).area - w * h) > 0.02 * w * h:  # not an axis-aligned rectangle
+        return None
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    m = 0.2 * min(w, h)
+    if w >= h:
+        along = np.linspace(min(xs) + m, max(xs) - m, 5)
+        return along, np.full_like(along, cy)
+    along = np.linspace(min(ys) + m, max(ys) - m, 5)
+    return np.full_like(along, cx), along
+
+
 def check(name: str, args: dict) -> list[str]:
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -157,6 +298,7 @@ def check(name: str, args: dict) -> list[str]:
             # Composite edges (slotted, compound, ...): only check that nothing cuts in.
             composite = e["char"] is None
             if not composite and e["char"] not in FINGER_EDGES and not (
+                    e.get("type") in FINGER_TYPES and e.get("angle") == 90) and not (
                     e["char"] in WALL_EDGES and args.get("walltype", "plain") == "plain"):
                 continue
             band = edge_band(a, i)
@@ -164,7 +306,7 @@ def check(name: str, args: dict) -> list[str]:
                 continue
             x, y = band
             ina = contains_xy(a.poly, x, y)
-            filled = hit(a.world(x, y, np.full_like(x, t / 2)))
+            filled = hit(a.world(x, y, np.full_like(x, a.t / 2)))
             gaps, fingers = ~ina, ina
             fill = filled[gaps].mean() if gaps.any() else 1.0
             overlap = filled[fingers].mean() if fingers.any() else 0.0
@@ -172,13 +314,22 @@ def check(name: str, args: dict) -> list[str]:
                 fill = 1.0
             if fill < FILL_MIN or overlap > OVERLAP_MAX:
                 problems.append(f"{a.name} edge {i} '{e['char'] or '?'}': fill {fill:.0%}, overlap {overlap:.0%}")
+        for hole in a.rec["outline"]["holes"]:
+            band = finger_hole(hole, t)
+            if band is None:
+                continue
+            x, y = band
+            fill = hit(a.world(x, y, np.full_like(x, a.t / 2))).mean()
+            if fill < FILL_MIN:
+                xs, ys = [q[0] for q in hole], [q[1] for q in hole]
+                problems.append(f"{a.name} finger hole at {min(xs):.1f},{min(ys):.1f}: fill {fill:.0%}")
         # Coarse body check: parts cutting into each other.
         minx, miny, maxx, maxy = a.poly.bounds
         step = max(1.0, min(maxx - minx, maxy - miny) / 25)
         gx, gy = np.meshgrid(np.arange(minx, maxx, step), np.arange(miny, maxy, step))
         gx, gy = gx.ravel(), gy.ravel()
         keep = contains_xy(a.poly, gx, gy)
-        w = a.world(gx[keep], gy[keep], np.full(keep.sum(), t / 2))
+        w = a.world(gx[keep], gy[keep], np.full(keep.sum(), a.t / 2))
         for b in others:
             frac = b.contains(w).mean() if len(w) else 0.0
             if frac > 0.01 and a.name <= b.name:
@@ -189,9 +340,11 @@ def check(name: str, args: dict) -> list[str]:
 def main(names: list[str]) -> int:
     failed = 0
     for name in names or sorted(PLACEMENTS):
-        for args in [{}] + CASES.get(name, []):
+        for args in ([] if name in SKIP_DEFAULTS else [{}]) + CASES.get(name, []):
             problems = check(name, args)
-            hard = [p for p in problems if not p.startswith("unplaced")]
+            soft = ("unplaced",) + (("finger hole",) if any(p.startswith("unplaced") for p in problems) else ())
+            soft += sum((v for (n, a), v in EXPECTED.items() if n == name and a in args.values()), ())
+            hard = [p for p in problems if not any(s in p for s in soft)]
             failed += bool(hard)
             print(f"{'FAIL' if hard else 'ok  '} {name} {args or ''}")
             for p in problems:

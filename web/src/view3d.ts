@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { bendGeometry } from "./bend";
 import type { Placement, RecordedPart, Vec3 } from "./protocol";
 
 const WOOD = 0xd9b382;
@@ -136,7 +137,9 @@ export class AssemblyView {
     const { outer, holes } = part.outline!;
     const shape = new THREE.Shape(outer.map(([x, y]) => new THREE.Vector2(x, y)));
     shape.holes = holes.map((h) => new THREE.Path(h.map(([x, y]) => new THREE.Vector2(x, y))));
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: 1 });
+    const flat = new THREE.ExtrudeGeometry(shape, { depth: p.t ?? thickness, bevelEnabled: false, curveSegments: 1 });
+    const geometry = p.bend?.length ? bendGeometry(flat, p.bend) : flat;
+    if (geometry !== flat) flat.dispose();
 
     const mesh = new THREE.Mesh(geometry, this.material);
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 20), this.edgeMaterial);
