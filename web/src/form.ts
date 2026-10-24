@@ -54,6 +54,11 @@ export class ParamForm {
     if (notify) this.onChange();
   }
 
+  /** Sets all given parameters without re-rendering (e.g. for undo). */
+  setAll(values: ArgValues) {
+    for (const [name, value] of Object.entries(values)) this.set(name, value, false);
+  }
+
   /** Changed values without the given parameters (e.g. ones derived from others). */
   changedValuesExcept(...names: string[]): ArgValues {
     const out = this.changedValues();

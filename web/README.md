@@ -76,8 +76,14 @@ npm run build    # static site in web/dist/
   an input on each label: Enter applies, arrow keys step by 1 mm (Shift: 10). The value goes into
   the form field, so the SVG is still made by Boxes.py from parameters only. With `outside` the
   lines span the outer size. Hidden in the exploded view and switchable with "Dimensions".
+  TrayLayout's column/row sizes live in its layout text: their lines (`x[k]`, `y[k]`) rewrite
+  just that number in the layout (`setLayoutSize` in `src/layout.ts`).
   So far: ABox, BasedBox, ClosedBox, CompartmentBox, DiceBox, ElectronicsBox, OpenBox,
-  PenHolderBox, SlantedTray, SlidingLidBox, TypeTray, UnevenHeightBox (x/y), UniversalBox.
+  PenHolderBox, SlantedTray, SlidingLidBox, TrayLayout, TypeTray, UnevenHeightBox (x/y),
+  UniversalBox.
+- Undo/redo (toolbar, Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) over all parameter changes, per generator.
+  Quick repeated changes to the same parameter or dimension (typing, arrow keys) are one step;
+  form text fields keep their own native undo while focused.
 
 ### Checking placements
 

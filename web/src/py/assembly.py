@@ -197,10 +197,14 @@ class Assembly:
         with the inner size)."""
         return getattr(self.box, "_web_args", {}).get(name, getattr(self.box, name))
 
-    def dim(self, arg: str, a: Vec, b: Vec, out: Vec, index: int | None = None) -> None:
+    def dim(self, arg: str, a: Vec, b: Vec, out: Vec, index: int | None = None,
+            sizes: list[float] | None = None, label: str | None = None,
+            axis: str | None = None) -> None:
         """An editable dimension in the 3D view: parameter arg (element index of a list
-        parameter like sx) measured from a to b, drawn offset along the unit vector out."""
-        value = self.arg(arg)
+        parameter like sx) measured from a to b, drawn offset along the unit vector out.
+        sizes are the list's elements if they are not the parameter itself (e.g. the column
+        sizes in TrayLayout's layout text, axis "x" or "y"); label overrides the shown name."""
+        value = self.arg(arg) if sizes is None else sizes
         values = None
         if index is not None:
             values = [float(v) for v in value]
@@ -208,7 +212,7 @@ class Assembly:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return
         self.dims.append({"arg": arg, "index": index, "values": values, "value": float(value),
-                          "a": a, "b": b, "out": out})
+                          "a": a, "b": b, "out": out, "label": label, "axis": axis})
 
     def frame(self, x: float, y: float, h: float, origin: Vec = (0.0, 0.0, 0.0),
               name: str = "") -> "BoxFrame":
@@ -278,12 +282,9 @@ class BoxFrame:
         the frame; the difference goes to the ends (h: wall below first)."""
         t = self.asm.t
         if x:
-            self._chain(x, self.at(0, -t, 0), X, self.x, neg(Y))
+            self.chain(x, "x")
         if y:
-            if y.startswith("-"):
-                self._chain(y[1:], self.at(self.x + t, self.y, 0), neg(Y), self.y, X)
-            else:
-                self._chain(y, self.at(self.x + t, 0, 0), Y, self.y, X)
+            self.chain(y[1:], "-y") if y.startswith("-") else self.chain(y, "y")
         if h:
             value = self.asm.arg(h)
             extra = value - self.h if isinstance(value, (int, float)) else 0.0
@@ -291,19 +292,29 @@ class BoxFrame:
             self.asm.dim(h, self.at(self.x + t, -t, -below), self.at(self.x + t, -t, self.h + extra - below),
                          (0.7071, -0.7071, 0.0))
 
-    def _chain(self, arg: str, start: Vec, d: Vec, inner: float, out: Vec) -> None:
-        """One dimension per list element (with walls of thickness t in between), or one for
-        a single value. With "outside" the given sizes are larger than the inner space: they
-        then cover it and the outer walls, end to end and centred."""
+    def chain(self, arg: str, side: str, sizes: list[float] | None = None,
+              label: str | None = None, axis: str | None = None) -> None:
+        """Dimensions along the front (side "x"), the right side ("y") or the right side from
+        back to front ("-y"): one per list element (with walls of thickness t in between), or
+        one for a single value. sizes/label/axis: see Assembly.dim. With "outside" the sizes
+        are larger than the inner space: they then cover it and the outer walls, end to end
+        and centred."""
         t = self.asm.t
-        value = self.asm.arg(arg)
-        sizes = [float(v) for v in value] if isinstance(value, list) else [float(value)]
+        start, d, inner, out = {
+            "x": (self.at(0, -t, 0), X, self.x, neg(Y)),
+            "y": (self.at(self.x + t, 0, 0), Y, self.y, X),
+            "-y": (self.at(self.x + t, self.y, 0), neg(Y), self.y, X),
+        }[side]
+        value = self.asm.arg(arg) if sizes is None else sizes
+        is_list = isinstance(value, list)
+        sizes = [float(v) for v in value] if is_list else [float(value)]
         if sum(sizes) + t * (len(sizes) - 1) > inner + 1e-6:
             t = 0.0
         pos = (inner - sum(sizes) - t * (len(sizes) - 1)) / 2
         for k, size in enumerate(sizes):
             self.asm.dim(arg, add(start, d, pos), add(start, d, pos + size), out,
-                         k if isinstance(value, list) else None)
+                         k if is_list else None, sizes if sizes is not None and is_list else None,
+                         f"{label}[{k + 1}]" if label and is_list else label, axis)
             pos += size + t
 
     def sub(self, x0: float, y0: float, z0: float, x: float, y: float, h: float,

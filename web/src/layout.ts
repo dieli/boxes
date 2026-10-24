@@ -31,3 +31,28 @@ export function defaultLayout(sx: string, sy: string): string {
 function mm(v: number): string {
   return String(Math.round(v * 100) / 100);
 }
+
+const X_LINE = /^((?: \|)* ,>\s*)(\d*\.?\d+)(\s*mm)/;
+const Y_LINE = /^((?:[ |][ xX])+[ |]\s*)(\d*\.?\d+)(\s*mm)/;
+
+/**
+ * Sets the size of column (axis "x") or row ("y") `index` in a layout text, leaving the rest
+ * of the text as it is. Returns null if the layout has no such column or row.
+ */
+export function setLayoutSize(layout: string, axis: "x" | "y", index: number, value: number): string | null {
+  let k = 0;
+  const lines = layout.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || line[0] === "#") continue;
+    const isX = X_LINE.test(line);
+    const m = isX ? null : Y_LINE.exec(line);
+    if ((axis === "x" && isX) || (axis === "y" && m)) {
+      if (k++ === index) {
+        lines[i] = line.replace(axis === "x" ? X_LINE : Y_LINE, (_, pre, _v, post) => `${pre}${mm(value)}${post}`);
+        return lines.join("\n");
+      }
+    }
+  }
+  return null;
+}

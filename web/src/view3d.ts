@@ -157,11 +157,11 @@ export class AssemblyView {
   }
 
   private dimLabel(dim: Dimension, focused: string | undefined): HTMLElement {
-    const key = `${dim.arg}:${dim.index ?? ""}`;
+    const key = `${dim.arg}:${dim.axis ?? ""}${dim.index ?? ""}`;
     const el = document.createElement("label");
     el.className = "dim3d";
     const name = document.createElement("span");
-    name.textContent = dim.index === null ? dim.arg : `${dim.arg}[${dim.index + 1}]`;
+    name.textContent = dim.label ?? (dim.index === null ? dim.arg : `${dim.arg}[${dim.index + 1}]`);
     const input = document.createElement("input");
     input.type = "text";
     input.inputMode = "decimal";

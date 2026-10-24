@@ -97,7 +97,8 @@ export interface Placement {
 /**
  * An editable dimension in the 3D view: parameter `arg` (element `index` of a list parameter
  * such as sx, whose current elements are `values`) measured from a to b in world space,
- * drawn offset along the unit vector `out`.
+ * drawn offset along the unit vector `out`. For TrayLayout, arg is "layout" and `axis` says
+ * whether index is a column ("x") or a row ("y") of the layout text.
  */
 export interface Dimension {
   arg: string;
@@ -107,6 +108,9 @@ export interface Dimension {
   a: Vec3;
   b: Vec3;
   out: Vec3;
+  /** Shown name if not arg / arg[index]. */
+  label: string | null;
+  axis: "x" | "y" | null;
 }
 
 /** true: generator has a placement map; string: it failed (error message); false: none. */

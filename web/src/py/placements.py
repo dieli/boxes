@@ -8,6 +8,7 @@ uses them only needs to call place_lids().
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 from typing import Callable
 
 from assembly import Assembly, BoxFrame, add, X, Y, Z, _polygon_segments, neg, positions
@@ -1453,6 +1454,11 @@ def tray_layout(a: Assembly) -> None:
     x, y = xs[-1], ys[0]
     f = a.frame(x, y, b.h)
     f.dims(h="h")
+    # Column and row sizes as written in the layout ("outside" scales box.x/box.y down).
+    given = SimpleNamespace()
+    type(b).parse(given, b.layout.split("\n"))
+    f.chain("layout", "x", given.x, label="x", axis="x")
+    f.chain("layout", "-y", given.y, label="y", axis="y")
     walls = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.walls"))
     for j in range(ly + 1):
         for start, end in _runs(b.hwalls[j][:lx]):

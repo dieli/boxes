@@ -1,7 +1,7 @@
 import "./style.css";
 import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
-import { defaultLayout } from "./layout";
+import { defaultLayout, setLayoutSize } from "./layout";
 import type { ArgValues, Dimension, GeneratorInfo, Placement, Point2, RecordedPart } from "./protocol";
 import type { AssemblyView } from "./view3d";
 
@@ -49,10 +49,72 @@ const form = new ParamForm($("form"), () => {
   syncLayout();
   clearTimeout(debounce);
   debounce = window.setTimeout(() => {
+    recordUndo();
     writeHash();
     void render();
   }, DEBOUNCE_MS);
 });
+
+// --- Undo / redo of parameter changes (per generator) ---
+
+const undoBtn = $<HTMLButtonElement>("undo");
+const redoBtn = $<HTMLButtonElement>("redo");
+/** Steps changing the same parameters within this time become one (typing, arrow keys). */
+const UNDO_MERGE_MS = 1000;
+let undoStack: ArgValues[] = [];
+let undoPos = -1;
+let undoLast = { keys: "", at: 0 };
+/** What made the pending change, if more specific than the changed parameters (a dimension). */
+let undoSource = "";
+
+function resetUndo() {
+  undoStack = [form.values()];
+  undoPos = 0;
+  undoLast = { keys: "", at: 0 };
+  updateUndoButtons();
+}
+
+function recordUndo() {
+  const values = form.values();
+  const top = undoStack[undoPos];
+  const changed = Object.keys(values).filter((k) => values[k] !== top?.[k]).join(",");
+  const keys = `${changed}|${undoSource}`;
+  undoSource = "";
+  if (!changed) return;
+  const now = performance.now();
+  const merge = keys === undoLast.keys && now - undoLast.at < UNDO_MERGE_MS && undoPos > 0 && undoPos === undoStack.length - 1;
+  undoLast = { keys, at: now };
+  if (merge) {
+    undoStack[undoPos] = values;
+  } else {
+    undoStack.splice(undoPos + 1);
+    undoStack.push(values);
+    undoPos++;
+  }
+  updateUndoButtons();
+}
+
+function stepUndo(delta: number) {
+  const pos = undoPos + delta;
+  if (pos < 0 || pos >= undoStack.length) return;
+  clearTimeout(debounce);
+  undoPos = pos;
+  undoLast = { keys: "", at: 0 };
+  const values = undoStack[pos];
+  form.setAll(values);
+  // A layout that was the default grid for its sx/sy follows them again.
+  if (current === "TrayLayout" && values.layout === defaultLayout(values.sx ?? "", values.sy ?? "")) {
+    lastDefaultLayout = values.layout;
+  }
+  updateUndoButtons();
+  writeHash();
+  void render();
+}
+
+function updateUndoButtons() {
+  undoBtn.disabled = undoPos <= 0;
+  redoBtn.disabled = undoPos >= undoStack.length - 1;
+}
 
 // --- URL state: #Generator?arg=value&… (only non-default args) ---
 
@@ -104,6 +166,7 @@ async function loadGenerator(name: string, initial: ArgValues = {}) {
   form.build(schema, initial);
   lastDefaultLayout = null;
   syncLayout();
+  resetUndo();
   writeHash();
   await render();
 }
@@ -163,6 +226,12 @@ function getView3d(): Promise<AssemblyView> {
 /** A dimension edited in 3D: write it into the form, which re-renders as for any edit. */
 function setDimension(dim: Dimension, value: number) {
   const v = Math.round(value * 100) / 100;
+  undoSource = `dim:${dim.arg}:${dim.axis ?? ""}${dim.index ?? ""}`;
+  if (dim.arg === "layout" && dim.axis && dim.index !== null) {
+    const layout = setLayoutSize(form.get("layout") ?? "", dim.axis, dim.index, v);
+    if (layout !== null) form.set("layout", layout);
+    return;
+  }
   if (dim.index === null || !dim.values) {
     form.set(dim.arg, String(v));
     return;
@@ -334,6 +403,20 @@ window.addEventListener("hashchange", () => {
 });
 $("reset").addEventListener("click", () => form.reset());
 $("zoom-in").addEventListener("click", () => ((zoom *= 1.25), applyZoom()));
+undoBtn.addEventListener("click", () => stepUndo(-1));
+redoBtn.addEventListener("click", () => stepUndo(1));
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  // Text fields in the form keep their own undo; the dimension inputs in 3D don't.
+  const el = document.activeElement;
+  const textField = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== "checkbox" && el.type !== "range");
+  if (textField && !el.closest(".labels3d")) return;
+  const key = e.key.toLowerCase();
+  if (key === "z" || key === "y") {
+    e.preventDefault();
+    stepUndo(key === "y" || e.shiftKey ? 1 : -1);
+  }
+});
 $("zoom-out").addEventListener("click", () => ((zoom /= 1.25), applyZoom()));
 $("zoom-fit").addEventListener("click", () => ((zoom = 1), applyZoom()));
 explodeInput.addEventListener("input", () => view3d?.setExplode(Number(explodeInput.value)));
