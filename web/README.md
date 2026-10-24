@@ -51,22 +51,23 @@ npm run build    # static site in web/dist/
     stay 2D), `boxes.lids.Lid` (flat, flatbrim, flatfang, overthetop, ontop) and
     `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces), and
     `Boxes.polygonWalls` around a `polygonWall` (straight pieces with angled finger joints, rounded
-    corners as flex bends, in any plane). Placed so far (105): ABox, AirPurifier, AngledBox,
-    BasedBox, BeeQueenTransportBox, BinTray, BirdHouse, BookHolder, BrickSorter, CardBox,
-    CardHolder, ClosedBox, CoffeeCapsuleHolder, Coffin, CoinBankSafe, CoinDisplay, CompartmentBox,
-    Console, Crate, Desksign, DiceBox, DiceTower, DinRailBox, DiscRack, Dispenser, Display,
-    DisplayCase, DisplayShelf, DividerTray, DoubleFlexDoorBox, DrillBox, DrillStand, ElectronicsBox,
-    EuroRackSkiff, FlexBox, FlexBox2, FlexBox3, FlexBox4, FlexBox5, GridfinityBase,
-    GridfinityDrillBox, GridfinityTrayLayout, HalfBox, HeartBox, HingeBox, HobbyCase,
-    IntegratedHingeBox, KeyHolder, Keypad, MagazineFile, MakitaPowerSupply, Matrix, NightLightBox,
-    NotesHolder, OpenBox, PaintStorage, PenHolderBox, PhotoFrame, Rack10Box, Rack19Box,
-    Rack19HalfWidth, RackBox, RegularBox, RegularStarBox, RollHolder, RoundedBox, RoundedRegularBox,
-    RoundedTrapezoidBox, SBCMicroRack, Shadowbox, SlantedTray, SlidingDrawer, SlidingLidBox,
-    SmallPartsTray, SmallPartsTray2, SpicesRack, StackableBin, StorageRack, StorageShelf, Tetris,
-    TrafficLight, TrayInsert, TrayLayout, TwoPiece, TypeTray, UBox, UnevenHeightBox, UniversalBox,
-    WallCaliper, WallChiselHolder, WallConsole, WallDrillBox, WallHook, WallHopper, WallPinRow,
-    WallPlaneHolder, WallPliersHolder, WallRack, WallRollHolder, WallSlottedHolder,
-    WallStackableBin, WallStairs, WallTypeTray, WallWrenchHolder, WineRack.
+    corners as flex bends, in any plane). Placed so far (113): ABox, AirPurifier, AngledBox,
+    BasedBox, BayonetBox, BeeQueenTransportBox, BinTray, BirdHouse, BookHolder, BottleStack,
+    BrickSorter, CardBox, CardHolder, ClosedBox, CoffeeCapsuleHolder, Coffin, CoinBankSafe,
+    CoinDisplay, CompartmentBox, Console, Crate, Desksign, DiceBox, DiceTower, DinRailBox, DiscRack,
+    Dispenser, Display, DisplayCase, DisplayShelf, DividerTray, DoubleFlexDoorBox, DrillBox,
+    DrillStand, ElectronicsBox, EuroRackSkiff, FilamentSpool, FlexBox, FlexBox2, FlexBox3, FlexBox4,
+    FlexBox5, GridfinityBase, GridfinityDrillBox, GridfinityTrayLayout, HalfBox, HeartBox, HingeBox,
+    HobbyCase, IntegratedHingeBox, KeyHolder, Keypad, LaptopStand, MagazineFile, MakitaPowerSupply,
+    Matrix, NightLightBox, NotesHolder, OpenBox, OrganPipe, PaintStorage, PenHolderBox, PhoneHolder,
+    PhotoFrame, Rack10Box, Rack19Box, Rack19HalfWidth, RackBox, Ramp, RegularBox, RegularStarBox,
+    RollHolder, RoundedBox, RoundedRegularBox, RoundedTrapezoidBox, SBCMicroRack, Shadowbox,
+    SlantedTray, SlidingDrawer, SlidingLidBox, SmallPartsTray, SmallPartsTray2, SpicesRack,
+    StackableBin, StorageRack, StorageShelf, Tetris, TrafficLight, TrayInsert, TrayLayout,
+    TriangleLamp, TwoPiece, TypeTray, UBox, UnevenHeightBox, UniversalBox, WallCaliper,
+    WallChiselHolder, WallConsole, WallDrillBox, WallHook, WallHopper, WallPinRow, WallPlaneHolder,
+    WallPliersHolder, WallRack, WallRollHolder, WallSlottedHolder, WallStackableBin, WallStairs,
+    WallTypeTray, WallWrenchHolder, WineRack.
   - Pieces of an assembly that stand upside down or turned (e.g. DiceTower's tray, the upper
     half of RegularStarBox) are placed through `_Moved`, which runs a `BoxFrame` (or plain
     `place` calls) through a rigid motion.

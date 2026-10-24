@@ -48,6 +48,14 @@ _LAYOUT = """ ,> 40mm
 
 CASES: dict[str, list[dict]] = {
     "DisplayShelf": [{"sx": "100:150:80"}, {"angle": "-20"}, {"include_back": "1", "include_front": "1", "include_bottom": "1"}, {"front_wall_height": "0"}, {"divider_wall_height": "40"}, {"slope_top": "1"}],
+    "BayonetBox": [{"lugs": "6"}, {"diameter": "120", "outside": "0"}],
+    "BottleStack": [{"double": "0"}, {"number": "5", "diameter": "60"}],
+    "LaptopStand": [{"angle": "8"}, {"l_depth": "300", "angle": "20"}],
+    "OrganPipe": [{"pitch": "a", "octave": "4"}],
+    "FilamentSpool": [{"sides": "5"}, {"sides": "12", "h": "70"}],
+    "PhoneHolder": [{"angle": "15"}, {"angle": "35", "phone_width": "90"}],
+    "Ramp": [{"n": "2"}, {"n": "3", "h": "40", "y": "120"}],
+    "TriangleLamp": [{"sharpcorners": "1"}, {"x": "150", "cornersize": "20"}],
     "BirdHouse": [{"x":"150","y":"120","h":"100","roof_overhang":"0.2"}],
     "CoinDisplay": [{"outside":"0"},{"angle":"45","coin_plate":"40"}],
     "Display": [{"angle":"10"}],
@@ -209,6 +217,8 @@ EXPECTED = {  # (generator, argument value or None for every case): problems to 
     ("RegularBox", "35"): ("cuts into",),
     # n=3: the plate corners reach into the rounded ends of the crossing walls' lowered tops
     ("RegularStarBox", "3"): ("cuts into",),
+    # sharpcorners: the walls are lengthened for a 22.5 degree bevel ground on by hand
+    ("TriangleLamp", "1"): ("cuts into",),
     # Without a back, the inner horizontal walls still have finger joints there.
     ("TrafficLight", "e"): ("edge 0 'f'",),
     # Upstream: the inner frames' bottom edge is F but the bottom has finger holes (fit f), their

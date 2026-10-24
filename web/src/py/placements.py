@@ -3208,3 +3208,204 @@ def bird_house(a: Assembly) -> None:
         n = (side * s, 0.0, s)
         o = add(add(ridge, v, -y_top), Y, -(oh + t))
         a.place(part, o, Y, v, n, name="roof")
+
+
+@placement("Ramp")
+def ramp(a: Assembly) -> None:
+    """Wedge (inner width x, depth tx, height ty): bottom plate, back wall, triangle sides
+    outside x and n braces inside, the diagonal on the hypotenuse running down to the front."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    tris = list(_helper(p, "rectangularTriangle"))
+    if not tris:
+        return
+    tx, ty = tris[0].x, tris[0].y
+    x = b.x
+    ang = math.atan2(ty, tx)
+    c, s = math.cos(ang), math.sin(ang)
+    f = a.frame(x, tx, ty)
+    f.bottom(p.label("Bottom"), rot=180)
+    f.back(p.label("Vertical Wall"))
+    # Triangles: the right angle (local (tx, 0)) at the back, on the floor.
+    for tri, x0, n in zip(p.labelled("Side"), (0.0, x), (neg(X), X)):
+        a.place(tri, (x0, 0.0, 0.0), Y, Z, n)
+    for k, tri in enumerate(p.labelled("Inside")):
+        a.place(tri, (x * (k + 1) / (b.n + 1) - t / 2, 0.0, 0.0), Y, Z, X)
+    # Diagonal: local y = 0 at the top, past the back wall by t / cos.
+    a.place(p.label("Diagonal"), (x, tx + t, ty + t * s / c), neg(X), (0.0, -c, -s), (0.0, -s, c))
+
+
+@placement("TriangleLamp")
+def triangle_lamp(a: Assembly) -> None:
+    """Two lamps, each a right isosceles triangle (legs x along +X and +Y from the right
+    angle at the origin): bottom, three walls, corner brackets at h - 1.5t carrying the
+    screen flush with the top. The second lamp is turned by 180 degrees, hypotenuses back to
+    back, so the pair forms a square."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, h, c = b.x, b.h, b.cornersize
+    tris = list(_helper(p, "rectangularTriangle"))
+    walls = list(_helper(p, "rectangularWall"))
+    if len(tris) < 10 or len(walls) < 6:
+        return
+    screens, bottoms, rights, corners = tris[0:2], tris[2:4], tris[4:6], tris[6:10]
+    s2 = math.sqrt(0.5)
+    m = (x + t * math.sqrt(2)) / 2 + 1.0
+    for k in range(2):
+        asm = a if k == 0 else _Moved(a, lambda v: (-v[0], -v[1], v[2]), (2 * m, 2 * m, 0.0))
+        asm.place(bottoms[k], (x, 0.0, 0.0), neg(X), Y, neg(Z), name="bottom")
+        asm.place(screens[k], (0.0, x, h - t), neg(Y), X, Z, name="screen")
+        asm.place(walls[2 + k], (0.0, 0.0, 0.0), X, Z, neg(Y), name="wall")       # F at the right angle
+        asm.place(walls[k], (0.0, x, 0.0), neg(Y), Z, neg(X), name="wall")        # f at the right angle
+        asm.place(walls[4 + k], (x, 0.0, 0.0), (-s2, s2, 0.0), Z, (s2, s2, 0.0), name="wall")
+        asm.place(rights[k], (0.0, c, h - 2 * t), neg(Y), X, Z, name="corner")
+        asm.place(corners[2 * k], (x, 0.0, h - t), neg(X), Y, neg(Z), name="corner")
+        asm.place(corners[2 * k + 1], (0.0, x, h - 2 * t), neg(Y), X, Z, name="corner")
+
+
+@placement("PhoneHolder")
+def phone_holder(a: Assembly) -> None:
+    """Stand leaning back by angle: the front plate on the triangles' hypotenuses (bottom at
+    the front, y = 0), the back plate behind their vertical legs, both covering the
+    triangles outside the phone width. The bottom supports stand in the front plate's finger
+    holes and through its bottom slots, the hook in front."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    walls = list(_helper(p, "rectangularWall"))
+    tris = list(_helper(p, "rectangularTriangle"))
+    if len(walls) < 2 or len(tris) < 2:
+        return
+    w = b.phone_width
+    rad = math.radians(b.angle)
+    c, s = math.cos(rad), math.sin(rad)
+    sd, sh = b.h * s, b.h * c
+    a.place(walls[0], (0.0, 0.0, 0.0), X, (0.0, s, c), (0.0, -c, s), name="Front")
+    a.place(walls[1], (w, sd, 0.0), neg(X), Z, Y, name="Back")
+    for tri, x0 in zip(tris, (-t, w)):
+        a.place(tri, (x0, 0.0, 0.0), Y, Z, X, name="Side")
+    # Supports: local (fl, 0) on the front plate's foot, local +x to the front.
+    margin = (w - b.bottom_support_spacing - t) / 2
+    fl = (b.bottom_margin + b.tab_size) * s
+    for q, cx in zip(p.where(lambda q: q.rec["helper"] == "free"), (margin, w - margin)):
+        a.place(q, (cx + t / 2, fl, 0.0), neg(Y), Z, neg(X), flip=q.mirrored, name="Bottom support")
+
+
+@placement("FilamentSpool")
+def filament_spool(a: Assembly) -> None:
+    """Axis along z: left flange z [-t, 0], the core's walls around a polygon (first side at
+    the front) up to the polygon plate at h - t, the bayonet's lower disc (both pieces in
+    one layer) on it and the right flange outside. The flanges' finger holes are around a
+    side at their local +y, so they are turned by 180 degrees."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    free = list(_helper(p, "free"))
+    plate = next(iter(_helper(p, "regularPolygonWall")), None)
+    walls = list(_helper(p, "rectangularWall"))
+    if len(free) < 2 or plate is None:
+        return
+    n, h = b.sides, b.h
+    prm = plate.rec["params"]
+    side, sh = prm["side"], prm["h"]
+    for q, z0, name in ((free[0], -t, "left flange"), (free[1], h + t, "right flange")):
+        a.place(q, (-q.x / 2, -q.y / 2, z0), X, Y, Z, rot=180, name=name)
+    _ring_walls(a, _polygon_segments([side, 360 / n] * n, (-side / 2, -sh)), walls)
+    _polygon_plate(a, plate, h - t)
+    for q in free[2:]:
+        _disc(a, q, h, "bayonet")
+
+
+@placement("OrganPipe")
+def organ_pipe(a: Assembly) -> None:
+    """Pipe along x (foot at x = 0, open or stopped end at x = L), mouth_width W along y,
+    pipe_depth D along z: back wall z [-t, 0], sides at y = 0 and W, the front in two pieces
+    with the mouth between them, the end cap at the foot and the languid at the foot's end,
+    leaving the jet gap under the front."""
+    p = a.parts
+    walls = list(_helper(p, "rectangularWall"))
+    if len(walls) < 7:
+        return
+    sides, back, upper, lower, cap, languid = walls[0:2], walls[2], walls[3], walls[4], walls[5], walls[6]
+    t = a.t
+    L, D, W, base = sides[0].x, sides[0].y, back.y, lower.x
+    a.place(sides[0], (0.0, 0.0, 0.0), X, Z, neg(Y), name="side")
+    a.place(sides[1], (L, W, 0.0), neg(X), Z, Y, flip=True, name="side")
+    a.place(back, (0.0, W, 0.0), X, neg(Y), neg(Z), name="back")
+    a.place(lower, (0.0, 0.0, D), X, Y, Z, name="front (foot)")
+    a.place(upper, (L - upper.x, 0.0, D), X, Y, Z, name="front (resonator)")
+    a.place(cap, (0.0, W, 0.0), neg(Y), Z, neg(X), name="foot (air hole)")
+    a.place(languid, (base - t, 0.0, 0.0), Y, Z, X, name="languid")
+
+
+@placement("LaptopStand")
+def laptop_stand(a: Assembly) -> None:
+    """Two triangles slotted into an X on the diagonals of the laptop's footprint, rear ends
+    at the back (+y), crossing at their slots over the origin. Both come from one move box:
+    the one with the bottom slot is drawn upright from local (off, 0), the other turned by
+    180 degrees from (off + base - spacing, th)."""
+    b = a.box
+    t = a.t
+    tris = sorted(_helper(a.parts, "free"),
+                  key=lambda q: sum(pt[1] for pt in q.rec["outline"]["outer"]) / len(q.rec["outline"]["outer"]))
+    if len(tris) < 2:
+        return
+    c = b.perform_calculations()
+    base, sb = c["base"], math.sin(math.radians(c["angle"]))
+    off = c["base_extra"] + b.spacing + sb * (c["lip_outer"] + 1)
+    th = c["height"] + 2 * b.ground_offset + b.spacing
+    s2 = math.sqrt(0.5)
+    # Lower: local u runs from the rear to the front along fa; slot centre at xa.
+    fa, na = (s2, -s2, 0.0), (-s2, -s2, 0.0)
+    xa = off + base / 2 + 5 * s2 - 3.5
+    a.place(tris[0], add(add((0.0, 0.0, 0.0), fa, -xa), na, -t / 2), fa, Z, na)
+    # Upper: upside down, local u from the front to the rear.
+    fb, nb = (-s2, -s2, 0.0), (-s2, s2, 0.0)
+    a.place(tris[1], add(add((0.0, 0.0, th), fb, off + base / 2 - b.spacing), nb, -t / 2), neg(fb), neg(Z), nb)
+
+
+@placement("BottleStack")
+def bottle_stack(a: Assembly) -> None:
+    """Fronts across x at depth t and l (= depth), the long beams along y in their slots at
+    r3 + 2 r1 k, half-lapped. With double, the second stack (fronts with the asymmetric
+    slots, short beams at 3.5t and 2 r1 k - t/2) sits inside the first, its deep slots over
+    the first one's beams, pulled out sideways by its full width."""
+    b = a.box
+    t = a.t
+    free = list(_helper(a.parts, "free"))
+    nr, l, r1 = b.number, b.depth, b.diameter / 2
+    pieces = 2 if b.double else 1
+    fronts, beams = free[:2 * pieces], free[2 * pieces:]
+    if len(fronts) < 2 * pieces:
+        return
+    long_ = [q for q in beams if q.x > l]
+    short = [q for q in beams if q.x <= l]
+    r3 = 1.5 * t if b.double else 0.5 * t
+    tw = fronts[0].x
+    # Back fronts flipped, not turned: the second stack's slots are not symmetric.
+    stacks = [(0.0, (t, l), [r3 + 2 * r1 * k for k in range(nr + 1)], long_, 0.0)]
+    if b.double:
+        stacks.append((2 * r1 * nr, (2.5 * t, l - 1.5 * t),
+                       [3.5 * t] + [2 * r1 * k - t / 2 for k in range(1, nr + 1)], short, 1.5 * t))
+    for k, (dx, ys, xs, bs, dy) in enumerate(stacks):
+        f0, f1 = fronts[2 * k:2 * k + 2]
+        a.place(f0, (dx, ys[0] + t, 0.0), X, Z, neg(Y), name="Front")
+        a.place(f1, (dx + tw, ys[1], 0.0), neg(X), Z, Y, flip=True, name="Front")
+        for q, x in zip(bs, xs):
+            a.place(q, (dx + x - t / 2, dy, 0.0), Y, Z, X, name="Beam")
+
+
+@placement("BayonetBox")
+def bayonet_box(a: Assembly) -> None:
+    """Five disc layers stacked on the z axis in drawing order: bottom, ring, lower lug
+    layer, upper lug layer, lid. Pieces cut from one disc share its frame and layer (the lid's
+    lug ring sits inside the box's ring of the same layer)."""
+    t = a.t
+    layers: dict[float, list] = {}
+    for q in _helper(a.parts, "free"):
+        layers.setdefault(round(q.rec["matrix"][2], 3), []).append(q)
+    for k, key in enumerate(sorted(layers)):
+        for q in layers[key]:
+            _disc(a, q, k * t, "lid" if k == 4 else "")
