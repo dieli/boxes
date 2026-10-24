@@ -1,7 +1,7 @@
 import "./style.css";
 import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
-import type { ArgValues, GeneratorInfo, Placement, Point2, RecordedPart } from "./protocol";
+import type { ArgValues, Dimension, GeneratorInfo, Placement, Point2, RecordedPart } from "./protocol";
 import type { AssemblyView } from "./view3d";
 
 const DEBOUNCE_MS = 150;
@@ -17,6 +17,9 @@ const partsList = $("parts-list");
 const partsCount = $("parts-count");
 const assemblyErrorEl = $("assembly-error");
 const explodeInput = $<HTMLInputElement>("explode");
+const showDimsInput = $<HTMLInputElement>("show-dims");
+const panel3d = $("panel3d");
+const no3dEl = $("no3d");
 const timingEl = $("timing");
 const errorEl = $("error");
 const downloadBtn = $<HTMLButtonElement>("download");
@@ -123,29 +126,46 @@ function applyZoom() {
 
 function getView3d(): Promise<AssemblyView> {
   view3dLoading ??= import("./view3d").then(({ AssemblyView }) => {
-    view3d = new AssemblyView($("canvas3d"), (part) => select(part));
+    view3d = new AssemblyView($("canvas3d"), (part) => select(part), setDimension);
     view3d.setExplode(Number(explodeInput.value));
+    view3d.setDimensionsVisible(showDimsInput.checked);
     return view3d;
   });
   return view3dLoading;
 }
 
+/** A dimension edited in 3D: write it into the form, which re-renders as for any edit. */
+function setDimension(dim: Dimension, value: number) {
+  const v = Math.round(value * 100) / 100;
+  if (dim.index === null || !dim.values) {
+    form.set(dim.arg, String(v));
+    return;
+  }
+  const values = dim.values.map((x, i) => (i === dim.index ? v : x));
+  form.set(dim.arg, values.map((x) => String(Math.round(x * 100) / 100)).join(":"));
+}
+
 async function update3d(name: string, result: RenderResult) {
   // Placements come from Python (src/py/placements.py). A generator without a placement
-  // map shows the 2D sheet only; a failing one shows the error instead of a broken model.
+  // map shows a placeholder next to the 2D sheet; a failing one shows the error instead of
+  // a broken model.
   const placements = new Map<number, Placement>();
   result.parts.forEach((p, i) => p.place && placements.set(i, p.place));
   const failed = typeof result.assembly === "string";
-  if (!failed && !placements.size) {
-    views.classList.remove("with3d");
+  const none = !failed && !placements.size;
+  panel3d.classList.toggle("none", none);
+  no3dEl.hidden = !none;
+  $("no3d-name").textContent = name;
+  if (none) {
+    assemblyErrorEl.hidden = true;
     return;
   }
-  views.classList.add("with3d");
   assemblyErrorEl.hidden = !failed;
   assemblyErrorEl.textContent = failed ? `3D placement failed: ${result.assembly}` : "";
   const view = await getView3d();
   if (name !== current) return;
   view.update(result.parts, placements, result.thickness, fittedFor !== name);
+  view.setDimensions(result.dims);
   fittedFor = name;
   view.setSelected(selected);
   buildPartsList(result.parts);
@@ -292,6 +312,7 @@ $("zoom-out").addEventListener("click", () => ((zoom /= 1.25), applyZoom()));
 $("zoom-fit").addEventListener("click", () => ((zoom = 1), applyZoom()));
 explodeInput.addEventListener("input", () => view3d?.setExplode(Number(explodeInput.value)));
 $("reset-camera").addEventListener("click", () => view3d?.resetCamera());
+showDimsInput.addEventListener("change", () => view3d?.setDimensionsVisible(showDimsInput.checked));
 $("show-all").addEventListener("click", () => setAllHidden(false));
 $("hide-all").addEventListener("click", () => setAllHidden(true));
 downloadBtn.addEventListener("click", () => {

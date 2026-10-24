@@ -78,10 +78,10 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
       post({ type: "schema", id: msg.id, schema: JSON.parse(bridge.get_schema(msg.generator)) });
     } else if (msg.type === "render") {
       const t = performance.now();
-      const { svg, parts, assembly, thickness } = JSON.parse(
+      const { svg, parts, assembly, dims, thickness } = JSON.parse(
         bridge.render_with_parts(msg.generator, JSON.stringify(msg.args)),
       );
-      post({ type: "rendered", id: msg.id, svg, parts, assembly, thickness, ms: performance.now() - t });
+      post({ type: "rendered", id: msg.id, svg, parts, assembly, dims, thickness, ms: performance.now() - t });
     }
   } catch (e) {
     post({ type: "error", id: "id" in msg ? msg.id : null, ...errorMessage(e) });

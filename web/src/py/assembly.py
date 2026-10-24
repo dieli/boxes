@@ -11,6 +11,7 @@ A placement function (see placements.py) gets an Assembly and puts parts into it
     f = a.frame(x, y, h)              # inner space [0,x] x [0,y] x [0,h]
     f.front(a.parts.label("front"))
     f.back(a.parts.label("back"), rot=180)
+    f.dims(x="x", y="y", h="h")       # editable dimensions in the 3D view
 """
 from __future__ import annotations
 
@@ -144,6 +145,7 @@ class Assembly:
         self.t: float = box.thickness
         self.parts = Parts(Part(i, w) for i, w in enumerate(walls))
         self.placements: dict[int, dict] = {}
+        self.dims: list[dict] = []
 
     def place(self, part: Part | None, origin: Vec, u: Vec, v: Vec, n: Vec,
               rot: int = 0, flip: bool = False, name: str = "",
@@ -189,6 +191,24 @@ class Assembly:
         if part is not None:
             part.placed = True
             self.placements[part.index] = {"scrap": True}
+
+    def arg(self, name: str):
+        """A parameter as the user gave it (generators with "outside" overwrite e.g. box.x
+        with the inner size)."""
+        return getattr(self.box, "_web_args", {}).get(name, getattr(self.box, name))
+
+    def dim(self, arg: str, a: Vec, b: Vec, out: Vec, index: int | None = None) -> None:
+        """An editable dimension in the 3D view: parameter arg (element index of a list
+        parameter like sx) measured from a to b, drawn offset along the unit vector out."""
+        value = self.arg(arg)
+        values = None
+        if index is not None:
+            values = [float(v) for v in value]
+            value = values[index]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return
+        self.dims.append({"arg": arg, "index": index, "values": values, "value": float(value),
+                          "a": a, "b": b, "out": out})
 
     def frame(self, x: float, y: float, h: float, origin: Vec = (0.0, 0.0, 0.0),
               name: str = "") -> "BoxFrame":
@@ -250,6 +270,41 @@ class BoxFrame:
             self._face(part, "plate", self.at(x0, self.y - y0, z0), X, neg(Y), neg(Z), rot, 0, 0)
         else:
             self._face(part, "plate", self.at(x0, y0, z0), X, Y, Z, rot, 0, 0)
+
+    def dims(self, x: str | None = None, y: str | None = None, h: str | None = None) -> None:
+        """Dimensions of the frame along x (front), y (right side) and h (front right corner),
+        from the named parameters. A parameter may be a list of compartment sizes (sx, sy;
+        sy runs back to front if given as "-sy"). With "outside" the parameter is larger than
+        the frame; the difference goes to the ends (h: wall below first)."""
+        t = self.asm.t
+        if x:
+            self._chain(x, self.at(0, -t, 0), X, self.x, neg(Y))
+        if y:
+            if y.startswith("-"):
+                self._chain(y[1:], self.at(self.x + t, self.y, 0), neg(Y), self.y, X)
+            else:
+                self._chain(y, self.at(self.x + t, 0, 0), Y, self.y, X)
+        if h:
+            value = self.asm.arg(h)
+            extra = value - self.h if isinstance(value, (int, float)) else 0.0
+            below = min(max(extra, 0.0), t)
+            self.asm.dim(h, self.at(self.x + t, -t, -below), self.at(self.x + t, -t, self.h + extra - below),
+                         (0.7071, -0.7071, 0.0))
+
+    def _chain(self, arg: str, start: Vec, d: Vec, inner: float, out: Vec) -> None:
+        """One dimension per list element (with walls of thickness t in between), or one for
+        a single value. With "outside" the given sizes are larger than the inner space: they
+        then cover it and the outer walls, end to end and centred."""
+        t = self.asm.t
+        value = self.asm.arg(arg)
+        sizes = [float(v) for v in value] if isinstance(value, list) else [float(value)]
+        if sum(sizes) + t * (len(sizes) - 1) > inner + 1e-6:
+            t = 0.0
+        pos = (inner - sum(sizes) - t * (len(sizes) - 1)) / 2
+        for k, size in enumerate(sizes):
+            self.asm.dim(arg, add(start, d, pos), add(start, d, pos + size), out,
+                         k if isinstance(value, list) else None)
+            pos += size + t
 
     def sub(self, x0: float, y0: float, z0: float, x: float, y: float, h: float,
             name: str | None = None) -> "BoxFrame":

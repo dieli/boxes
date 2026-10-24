@@ -119,14 +119,57 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #preview g.selected path { stroke: var(--accent) !important; stroke-width: 0.8 !important; }
 #views.stale #preview svg, #views.stale #panel3d { opacity: 0.4; }
 
-#panel3d { display: none; position: relative; flex: 1; min-width: 0; border-left: 1px solid var(--border); }
-#views.with3d #panel3d { display: block; }
+#panel3d { position: relative; flex: 1; min-width: 0; border-left: 1px solid var(--border); }
+#panel3d.none > :not(#no3d) { display: none; }
+#no3d {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+#no3d[hidden] { display: none; }
+#no3d p { margin: 0; }
+#no3d strong { color: var(--text); }
+.labels3d { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.dim3d {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px 1px 5px;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: #2563eb;
+  font-size: 11px;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.dim3d input {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  padding: 0 2px;
+  width: auto;
+  text-align: right;
+}
+.dim3d input:focus { outline: 1px solid #2563eb; background: var(--bg); }
 #canvas3d { position: absolute; inset: 0; }
 #canvas3d canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .controls3d {
   position: absolute;
   top: 8px;
   left: 8px;
+  max-width: calc(100% - 244px);
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 8px;

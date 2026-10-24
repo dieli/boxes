@@ -23,14 +23,14 @@ def placement(*names: str):
     return register
 
 
-def assemble(name: str, box, walls: list[dict]) -> dict[int, dict] | None:
-    """Placements by index into walls, or None if the generator has no placement function."""
+def assemble(name: str, box, walls: list[dict]) -> Assembly | None:
+    """The placed assembly, or None if the generator has no placement function."""
     func = PLACEMENTS.get(name)
     if func is None:
         return None
     asm = Assembly(box, walls)
     func(asm)
-    return asm.placements
+    return asm
 
 
 # --- Lids -----------------------------------------------------------------------------
@@ -141,6 +141,7 @@ def _outer_walls(a: Assembly, f: BoxFrame, labels: dict[str, str]) -> None:
 def universal_box(a: Assembly) -> None:
     b = a.box
     f = a.frame(b.x, b.y, b.h)
+    f.dims(x="x", y="y", h="h")
     _outer_walls(a, f, {"front": "front", "back": "back", "left": "left",
                         "right": "right", "bottom": "bottom"})
     place_lids(a, f, b.top_edge)
@@ -150,6 +151,7 @@ def universal_box(a: Assembly) -> None:
 def a_box(a: Assembly) -> None:
     b = a.box
     f = a.frame(b.x, b.y, b.h)
+    f.dims(x="x", y="y", h="h")
     own = a.parts.not_drawn_by("Lid.__call__")
     f.bottom(own.edges("ffff").first())
     walls = own.where(lambda p: p.chars != "ffff")
@@ -166,6 +168,7 @@ def closed_box(a: Assembly) -> None:
     if front is None or side is None:
         return
     f = a.frame(front.x, side.x, front.y)
+    f.dims(x="x", y="y", h="h")
     f.front(front)
     f.right(side)
     _outer_walls(a, f, {"Wall 3": "back", "Wall 4": "left", "Bottom": "bottom", "Top": "top"})
@@ -178,6 +181,7 @@ def type_tray(a: Assembly) -> None:
     x = sum(b.sx) + t * (len(b.sx) - 1)
     y = sum(b.sy) + t * (len(b.sy) - 1)
     f = a.frame(x, y, b.h)
+    f.dims(x="sx", y="-sy", h="h")
     p = a.parts
     _outer_walls(a, f, {"front": "front", "back": "back", "left side": "left",
                         "right side": "right", "bottom": "bottom"})
@@ -249,6 +253,7 @@ def dice_box(a: Assembly) -> None:
     x, h, y, hl = front.x, front.y, tray.y, lid_front.y
     # Box: closed by the dice tray on top (finger joints), hinge edges on the side walls.
     f = a.frame(x, y, h)
+    f.dims(x="x", y="y", h="h")
     f.bottom(bottom, rot=90)
     f.top(tray)
     f.front(front)
@@ -289,6 +294,7 @@ def based_box(a: Assembly) -> None:
         return
     # Sizes from the parts: render() adjusts x and y for "outside" only locally.
     f = a.frame(left.x, front.x, front.y)
+    f.dims(x="x", y="y", h="h")
     f.bottom(p.label("base"))
     f.left(p.label("front"))
     f.right(p.label("back"))
@@ -944,6 +950,7 @@ def compartment_box(a: Assembly) -> None:
     y = sum(b.sy) + t * (len(b.sy) - 1)
     h = b.h
     f = a.frame(x, y, h)
+    f.dims(x="sx", y="-sy", h="h")
     # Unlike in TypeTray, front and back are drawn as seen from inside.
     f.front(p.label("front"), flip=True)
     f.back(p.label("back"), flip=True)
@@ -979,6 +986,7 @@ def open_box(a: Assembly) -> None:
         return
     front, side = walls[0], walls[1]
     f = a.frame(front.x, side.x, front.y)
+    f.dims(x="x", y="y", h="h")
     f.front(walls.first())
     f.right(walls.first())  # f edge (left) at the front
     f.left(walls.first(), flip=True)
@@ -1000,6 +1008,7 @@ def uneven_height_box(a: Assembly) -> None:
     h = [w0.rec["params"]["h0"], w0.rec["params"]["h1"], w1.rec["params"]["h1"],
          traps[2].rec["params"]["h1"]]
     f = a.frame(x, y, max(h))
+    f.dims(x="x", y="y")
     for face in ("front", "right", "back", "left"):
         getattr(f, face)(traps.first())
     if b.bottom_edge != "e":
@@ -1032,6 +1041,7 @@ def sliding_lid_box(a: Assembly) -> None:
     x, y, h = b.x, b.y, b.h
     hp = side.y  # h + gap
     f = a.frame(x, y, h)
+    f.dims(x="x", y="y", h="h")
     _outer_walls(a, f, {"left side": "left", "right side": "right", "back": "back",
                         "front": "front"})
     a.place(p.label("bottom"), (0.0, 0.0, 0.0), Y, X, neg(Z))
@@ -1061,6 +1071,7 @@ def pen_holder_box(a: Assembly) -> None:
     t = a.t
     p = a.parts
     f = a.frame(b.x, b.y, b.h)
+    f.dims(x="x", y="y", h="h")
     _outer_walls(a, f, {"front_face": "front", "back_face": "back", "left_side": "left",
                         "right_side": "right", "bottom": "bottom"})
     z1 = b.h - b.plate1_offset - t / 2  # centre of the upper plate
@@ -1076,6 +1087,7 @@ def electronics_box(a: Assembly) -> None:
     t = a.t
     p = a.parts
     f = a.frame(b.x, b.y, b.h)
+    f.sub(0, 0, 0, b.x, b.y, b.h - 2 * t).dims(x="x", y="y", h="h")  # h: below the top
     _outer_walls(a, f, {"Wall 1": "front", "Wall 2": "right", "Wall 3": "back",
                         "Wall 4": "left", "Bottom": "bottom"})
     f.plate(p.label("Top"), b.h - t)
@@ -1137,6 +1149,7 @@ def slanted_tray(a: Assembly) -> None:
     p = a.parts
     x = sum(b.sx) + t * (len(b.sx) - 1)
     f = a.frame(x, b.y, b.h)
+    f.dims(x="sx", y="y", h="h")
     rects = _helper(p, "rectangularWall")
     f.back(rects.first(), rot=180)
     f.bottom(rects.first())

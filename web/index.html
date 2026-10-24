@@ -37,6 +37,7 @@
           <div id="canvas3d"></div>
           <div class="controls3d">
             <label>Explode <input id="explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
+            <label><input id="show-dims" type="checkbox" checked /> Dimensions</label>
             <button id="reset-camera" class="secondary" title="Reset camera">Reset view</button>
           </div>
           <details id="parts3d" open>
@@ -48,6 +49,10 @@
             <ul id="parts-list"></ul>
           </details>
           <p id="assembly-error" hidden></p>
+          <div id="no3d" hidden>
+            <p><strong>3D view not implemented yet</strong> for <span id="no3d-name"></span>.</p>
+            <p>The 2D sheet and downloads work as usual.</p>
+          </div>
         </section>
       </div>
     </main>

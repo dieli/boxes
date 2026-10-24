@@ -55,7 +55,8 @@ npm run build    # static site in web/dist/
     UnevenHeightBox, UniversalBox, WallCaliper, WallChiselHolder, WallConsole, WallDrillBox,
     WallHook, WallHopper, WallPinRow, WallPlaneHolder, WallPliersHolder, WallRack, WallRollHolder,
     WallSlottedHolder, WallStackableBin, WallStairs, WallTypeTray, WallWrenchHolder.
-  - Generators without a function show 2D only; walls a function does not place, or that are not
+  - Generators without a function show the 2D sheet and a "3D view not implemented yet" note in
+    the 3D panel; walls a function does not place, or that are not
     drawn through a recorded helper (e.g. ElectronicsBox corner triangles, CompartmentBox's
     one-piece lip), are listed as "2D".
 - `src/view3d.ts` (Three.js, loaded lazily) extrudes the outlines by the material thickness.
@@ -64,6 +65,14 @@ npm run build    # static site in web/dist/
   rounded sides it is fitted to.
   Clicking a part in either view, or in the parts list, selects it everywhere. The parts list can
   hide single parts in 3D (kept while you edit parameters, reset when you switch generators).
+- Editable dimensions: a placement function can declare which parameters a dimension line shows
+  (`BoxFrame.dims(x="x", y="y", h="h")`, list parameters like `sx` give one line per compartment,
+  `"-sy"` runs back to front; `Assembly.dim()` for anything else). The 3D view draws them with
+  an input on each label: Enter applies, arrow keys step by 1 mm (Shift: 10). The value goes into
+  the form field, so the SVG is still made by Boxes.py from parameters only. With `outside` the
+  lines span the outer size. Hidden in the exploded view and switchable with "Dimensions".
+  So far: ABox, BasedBox, ClosedBox, CompartmentBox, DiceBox, ElectronicsBox, OpenBox,
+  PenHolderBox, SlantedTray, SlidingLidBox, TypeTray, UnevenHeightBox (x/y), UniversalBox.
 
 ### Checking placements
 

@@ -1,11 +1,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { bendGeometry } from "./bend";
-import type { Placement, RecordedPart, Vec3 } from "./protocol";
+import type { Dimension, Placement, RecordedPart, Vec3 } from "./protocol";
 
 const WOOD = 0xd9b382;
 const WOOD_EDGE = 0x6b4f2e;
 const SELECTED = 0xf97316;
+const DIMENSION = 0x2563eb;
 const CLICK_TOLERANCE_PX = 4;
 
 interface PartObject {
@@ -34,14 +36,23 @@ export class AssemblyView {
   private selected: number | null = null;
   private hidden = new Set<number>();
   private needsRender = true;
+  private labels = new CSS2DRenderer();
+  private dims = new THREE.Group();
+  private dimMaterial = new THREE.LineBasicMaterial({ color: DIMENSION, depthTest: false });
+  private showDims = true;
+  /** Dimension input to focus once the label renderer has put it into the page. */
+  private refocus: HTMLInputElement | null = null;
 
   constructor(
     private container: HTMLElement,
     private onSelect: (svgPart: number | null) => void,
+    /** A dimension label was edited: the parameter's new value. */
+    private onDimension: (dim: Dimension, value: number) => void,
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
-    container.append(this.renderer.domElement);
+    this.labels.domElement.className = "labels3d";
+    container.append(this.renderer.domElement, this.labels.domElement);
 
     this.camera.up.set(0, 0, 1);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -50,7 +61,7 @@ export class AssemblyView {
 
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8d7c6a, 1.6));
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.root);
+    this.scene.add(this.root, this.dims);
 
     new ResizeObserver(() => this.resize()).observe(container);
     this.installPicking();
@@ -58,6 +69,9 @@ export class AssemblyView {
       if (this.controls.update() || this.needsRender) {
         this.needsRender = false;
         this.renderer.render(this.scene, this.camera);
+        this.labels.render(this.scene, this.camera);
+        this.refocus?.focus();
+        this.refocus = null;
       }
     });
   }
@@ -96,6 +110,89 @@ export class AssemblyView {
     this.applyExplode();
   }
 
+  /**
+   * Shows editable dimension lines (in the assembled view only). Keeps keyboard focus on
+   * the same dimension across rebuilds, so Tab / arrow keys keep working while re-rendering.
+   */
+  setDimensions(dims: Dimension[]) {
+    const focused = document.activeElement instanceof HTMLInputElement && this.labels.domElement.contains(document.activeElement)
+      ? document.activeElement.dataset.key
+      : undefined;
+    for (const c of [...this.dims.children]) {
+      this.dims.remove(c);
+      if (c instanceof THREE.LineSegments) c.geometry.dispose();
+    }
+    const size = new THREE.Box3().setFromObject(this.root).getSize(new THREE.Vector3());
+    const gap = Math.max(10, 0.12 * Math.max(size.x, size.y, size.z));
+    const points: THREE.Vector3[] = [];
+    for (const dim of dims) {
+      const a = new THREE.Vector3(...dim.a);
+      const b = new THREE.Vector3(...dim.b);
+      const out = new THREE.Vector3(...dim.out).multiplyScalar(gap);
+      const along = b.clone().sub(a).normalize();
+      const a1 = a.clone().add(out);
+      const b1 = b.clone().add(out);
+      const over = out.clone().multiplyScalar(0.15);
+      const tick = along.clone().add(out.clone().normalize()).multiplyScalar(gap * 0.12);
+      points.push(a, a1.clone().add(over), b, b1.clone().add(over), a1, b1);
+      for (const p of [a1, b1]) points.push(p.clone().sub(tick), p.clone().add(tick));
+      const label = new CSS2DObject(this.dimLabel(dim, focused));
+      label.position.copy(a1).add(b1).multiplyScalar(0.5);
+      this.dims.add(label);
+    }
+    const lines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), this.dimMaterial);
+    lines.renderOrder = 1;
+    this.dims.add(lines);
+    this.applyDimsVisible();
+  }
+
+  setDimensionsVisible(show: boolean) {
+    this.showDims = show;
+    this.applyDimsVisible();
+  }
+
+  private applyDimsVisible() {
+    this.dims.visible = this.showDims && this.explode === 0;
+    this.needsRender = true;
+  }
+
+  private dimLabel(dim: Dimension, focused: string | undefined): HTMLElement {
+    const key = `${dim.arg}:${dim.index ?? ""}`;
+    const el = document.createElement("label");
+    el.className = "dim3d";
+    const name = document.createElement("span");
+    name.textContent = dim.index === null ? dim.arg : `${dim.arg}[${dim.index + 1}]`;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.dataset.key = key;
+    input.value = formatMm(dim.value);
+    input.size = Math.max(3, input.value.length);
+    input.title = "Enter to apply, ↑/↓ to step (Shift: 10)";
+    const commit = () => {
+      const v = Number(input.value.replace(",", "."));
+      if (Number.isFinite(v) && v > 0 && v !== dim.value) this.onDimension(dim, v);
+      else input.value = formatMm(dim.value);
+    };
+    input.addEventListener("change", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") input.blur();
+      else if (e.key === "Escape") {
+        input.value = formatMm(dim.value);
+        input.blur();
+      } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const step = (e.shiftKey ? 10 : 1) * (e.key === "ArrowUp" ? 1 : -1);
+        const v = Math.max(1, (Number(input.value.replace(",", ".")) || dim.value) + step);
+        input.value = formatMm(v);
+        this.onDimension(dim, v);
+      }
+    });
+    el.append(name, input);
+    if (key === focused) this.refocus = input;
+    return el;
+  }
+
   setSelected(svgPart: number | null) {
     this.selected = svgPart;
     this.applySelection();
@@ -121,7 +218,8 @@ export class AssemblyView {
     // Fit the bounding sphere into the narrower of the vertical and horizontal field of view.
     const vHalf = (this.camera.fov * Math.PI) / 360;
     const hHalf = Math.atan(Math.tan(vHalf) * this.camera.aspect);
-    const radius = (maxDim * Math.sqrt(3)) / 2;
+    // Room for the dimension lines and their labels around the model.
+    const radius = ((maxDim * Math.sqrt(3)) / 2) * (this.showDims ? 1.3 : 1);
     const dist = (radius / Math.sin(Math.min(vHalf, hHalf))) * 1.05;
     const dir = new THREE.Vector3(0.9, -1.6, 1.1).normalize();
     this.camera.position.copy(center).addScaledVector(dir, dist);
@@ -155,6 +253,7 @@ export class AssemblyView {
   }
 
   private applyExplode() {
+    this.applyDimsVisible();
     for (const o of this.objects) {
       const offset = o.explodeDir.clone().multiplyScalar(this.explode * this.explodeDistance);
       o.group.matrix.copy(new THREE.Matrix4().makeTranslation(offset).multiply(o.base));
@@ -189,6 +288,7 @@ export class AssemblyView {
     const { clientWidth: w, clientHeight: h } = this.container;
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
+    this.labels.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.needsRender = true;
@@ -212,6 +312,10 @@ export class AssemblyView {
       this.onSelect(svgPart);
     });
   }
+}
+
+function formatMm(v: number): string {
+  return String(Math.round(v * 100) / 100);
 }
 
 /** Matrix with columns ux, uy, n and translation origin (may be a reflection). */

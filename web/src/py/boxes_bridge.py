@@ -116,6 +116,9 @@ def _render_box(name: str, args_json: str):
     box = _generators[name]()
     args = json.loads(args_json)
     box.parseArgs([f"--{k}={v}" for k, v in args.items()] + ["--format=svg"])
+    # Parameter values as given: generators with "outside" overwrite e.g. self.x with the inner size.
+    box._web_args = {k: (list(v) if isinstance(v, list) else v) for k, v in vars(box).items()
+                     if isinstance(v, (int, float, list)) and not isinstance(v, bool)}
     box.open()
     box.render()
     return box, box.close().getvalue().decode("utf-8")
@@ -533,7 +536,7 @@ def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int]) 
 def render_with_parts(name: str, args_json: str) -> str:
     """Like render(), plus the recorded walls and their 3D placement.
 
-    Returns {"svg", "parts", "assembly", "thickness"}: "assembly" is false when the generator has no
+    Returns {"svg", "parts", "assembly", "dims", "thickness"}: "assembly" is false when the generator has no
     placement function (2D only), or the error message if placing failed.
     """
     global _recorder
@@ -582,11 +585,13 @@ def render_with_parts(name: str, args_json: str) -> str:
         parts.append(w)
     parts += _unrecorded(rec, wall_parts, consumed)
     try:
-        placements = assemble(name, box, parts)
+        asm = assemble(name, box, parts)
+        placements, dims = (asm.placements, asm.dims) if asm else (None, [])
         assembly = placements is not None
     except Exception as e:  # a broken placement must not break the 2D preview
-        placements, assembly = None, f"{type(e).__name__}: {e}"
+        placements, dims, assembly = None, [], f"{type(e).__name__}: {e}"
     for i, w in enumerate(parts):
         w["place"] = placements.get(i) if placements else None
     parts = [w for w in parts if not (w["place"] or {}).get("scrap")]
-    return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "thickness": box.thickness})
+    return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "dims": dims,
+                       "thickness": box.thickness})

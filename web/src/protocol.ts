@@ -94,6 +94,21 @@ export interface Placement {
   bend?: Bend[];
 }
 
+/**
+ * An editable dimension in the 3D view: parameter `arg` (element `index` of a list parameter
+ * such as sx, whose current elements are `values`) measured from a to b in world space,
+ * drawn offset along the unit vector `out`.
+ */
+export interface Dimension {
+  arg: string;
+  index: number | null;
+  values: number[] | null;
+  value: number;
+  a: Vec3;
+  b: Vec3;
+  out: Vec3;
+}
+
 /** true: generator has a placement map; string: it failed (error message); false: none. */
 export type AssemblyStatus = boolean | string;
 
@@ -115,6 +130,7 @@ export type FromWorker =
       svg: string;
       parts: RecordedPart[];
       assembly: AssemblyStatus;
+      dims: Dimension[];
       thickness: number;
       ms: number;
     }

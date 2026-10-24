@@ -1,6 +1,7 @@
 import type {
   ArgValues,
   AssemblyStatus,
+  Dimension,
   FromWorker,
   GeneratorGroup,
   GeneratorInfo,
@@ -19,6 +20,7 @@ export interface RenderResult {
   svg: string;
   parts: RecordedPart[];
   assembly: AssemblyStatus;
+  dims: Dimension[];
   thickness: number;
   /** Time spent inside Python. */
   ms: number;
@@ -104,8 +106,8 @@ export class BoxesClient {
     if (msg.type === "error") p.reject(new BoxesError(msg.message, msg.detail));
     else if (msg.type === "schema") p.resolve(msg.schema);
     else {
-      const { svg, parts, assembly, thickness, ms } = msg;
-      p.resolve({ svg, parts, assembly, thickness, ms });
+      const { svg, parts, assembly, dims, thickness, ms } = msg;
+      p.resolve({ svg, parts, assembly, dims, thickness, ms });
     }
   }
 

@@ -42,6 +42,14 @@ export class ParamForm {
     return out;
   }
 
+  /** Sets one parameter (e.g. from a dimension in the 3D view) and re-renders. */
+  set(name: string, value: string) {
+    const input = this.inputs.get(name);
+    if (!input) return;
+    setValue(input.arg, input.el, value);
+    this.onChange();
+  }
+
   reset() {
     for (const { arg, el } of this.inputs.values()) setValue(arg, el, defaultString(arg));
     this.onChange();
