@@ -21,6 +21,7 @@ const explodeInput = $<HTMLInputElement>("explode");
 const showDimsInput = $<HTMLInputElement>("show-dims");
 const panel3d = $("panel3d");
 const no3dEl = $("no3d");
+const flatNote = $("flat-note");
 const timingEl = $("timing");
 const errorEl = $("error");
 const downloadBtn = $<HTMLButtonElement>("download");
@@ -41,6 +42,8 @@ let view3d: AssemblyView | null = null;
 let view3dLoading: Promise<AssemblyView> | null = null;
 /** Generator the 3D camera was last fitted to. */
 let fittedFor = "";
+/** Whether the camera was fitted to a flat view. */
+let fittedFlat = false;
 /** Parts hidden in 3D, by partKeys(); kept across parameter changes, reset per generator. */
 let hiddenKeys = new Set<string>();
 /** SVG part index -> key in hiddenKeys, for the current render. */
@@ -255,7 +258,7 @@ function setEditMode(on: boolean) {
     explodeInput.value = "0";
     view3d?.setExplode(0);
   }
-  explodeInput.disabled = editMode;
+  explodeInput.disabled = editMode || !flatNote.hidden;
   view3d?.setEditing(editMode);
 }
 
@@ -301,6 +304,12 @@ function moveGridLine(line: GridLine, values: number[]) {
   form.set(line.arg, values.map((x) => String(Math.round(x * 100) / 100)).join(":"));
 }
 
+/** A part lying as on the sheet: SVG user units (y down) seen from above (y up). */
+function flatPlacement(p: RecordedPart): Placement {
+  const [a, b, c, d, e, f] = p.matrix;
+  return { origin: [c, -f, 0], ux: [a, -d, 0], uy: [b, -e, 0], n: [0, 0, 1], name: "" };
+}
+
 /** TypeTray -> TrayLayout with the same grid and the settings both share; Back returns. */
 async function convertToTrayLayout() {
   const schema = await client.schema("TrayLayout");
@@ -336,7 +345,16 @@ async function update3d(name: string, result: RenderResult) {
   const placements = new Map<number, Placement>();
   result.parts.forEach((p, i) => p.place && placements.set(i, p.place));
   const failed = typeof result.assembly === "string";
-  const none = !failed && !placements.size;
+  // No assembly (or a failed one): the parts lie flat, as on the sheet.
+  const flat = !placements.size;
+  if (flat) {
+    result.parts.forEach((p, i) => {
+      if (!p.outline) return;
+      p.place = flatPlacement(p);
+      placements.set(i, p.place);
+    });
+  }
+  const none = !placements.size;
   panel3d.classList.toggle("none", none);
   no3dEl.hidden = !none;
   $("no3d-name").textContent = name;
@@ -349,9 +367,17 @@ async function update3d(name: string, result: RenderResult) {
   }
   assemblyErrorEl.hidden = !failed;
   assemblyErrorEl.textContent = failed ? `3D placement failed: ${result.assembly}` : "";
+  flatNote.hidden = !flat || failed;
+  flatNote.textContent = `Flat view: no assembly for ${name} yet.`;
+  explodeInput.disabled = flat || editMode;
   const view = await getView3d();
   if (name !== current) return;
-  view.update(result.parts, placements, result.thickness, fittedFor !== name);
+  view.update(result.parts, placements, result.thickness, fittedFor !== name || flat !== fittedFlat, flat);
+  fittedFlat = flat;
+  if (flat && explodeInput.value !== "0") {
+    explodeInput.value = "0";
+    view.setExplode(0);
+  }
   view.setDimensions(result.dims);
   view.setHandles(result.handles);
   view.setLines(result.lines);

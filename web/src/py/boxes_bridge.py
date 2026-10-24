@@ -471,10 +471,15 @@ def _outline(part, to_local: Affine, probe=None, min_area: float = 0.0) -> dict 
     return _outline_shapely(lines, probe, min_area)
 
 
+_CLOSE_GAP = 0.5  # mm
+
+
 def _outline_shapely(lines, probe=None, min_area: float = 0.0) -> dict | None:
     """Fallback for cuts split over several open paths: node and polygonize them."""
-    lines = [LineString(l) for l in lines]
-    faces = list(polygonize(unary_union(lines))) if lines else []
+    # Paths that miss their start by a hair (edges whose lengths don't quite add up, e.g.
+    # DinRailBox's rail edge, 0.1 mm short) are closed.
+    lines = [l + [l[0]] if 0 < math.dist(l[0], l[-1]) < _CLOSE_GAP else l for l in lines]
+    faces = list(polygonize(unary_union([LineString(l) for l in lines]))) if lines else []
     if not faces:
         return None
     # The polygonizer gives the material face with the inner cuts as interior rings.

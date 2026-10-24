@@ -47,6 +47,43 @@ _LAYOUT = """ ,> 40mm
 """
 
 CASES: dict[str, list[dict]] = {
+    "DisplayShelf": [{"sx": "100:150:80"}, {"angle": "-20"}, {"include_back": "1", "include_front": "1", "include_bottom": "1"}, {"front_wall_height": "0"}, {"divider_wall_height": "40"}, {"slope_top": "1"}],
+    "CoffeeCapsuleHolder": [{"backplate": "off"}],
+    "AirPurifier": [{"split_frames": "off"}, {"filters": "1"}, {"filters": "1", "split_frames": "off", "fan_diameter": "120"}],
+    "MakitaPowerSupply": [{"secondary_power": "none"}],
+    "PhotoFrame": [{"split_front": "off"}, {"x": "130", "y": "90"}],
+    "TrafficLight": [{"n": "2"}, {"upright": "off"}, {"back_edge": "h"}, {"back_edge": "e"}],
+    "Matrix": [{"h": "50"}],
+    "Dispenser": [{"x": "80", "y": "120"}, {"bottomheight": "40", "sideedges": "h"}, {"viewingwidth": "0"}],
+    "HalfBox": [{"sy": "30:60"}, {"Sturdy": "on", "sy": "30:60"}, {"Sturdy": "on", "sy": "50"}],
+    "CoinBankSafe": [{"x": "120", "y": "90"}],
+    "RollHolder": [{"one_piece": "off"}, {"height": "40", "axle": "30"}],
+    "KeyHolder": [{"num_hooks": "3", "mounting": "1"}],
+    "DinRailBox": [{"rail_offset": "10"}, {"x": "120", "y": "60", "rail_width": "15"}],
+    "WineRack": [{"walls": "minimal"}, {"walls": "no_verticals"}, {"y": "400"}, {"y": "400", "walls": "minimal"}],
+    "SpicesRack": [{"numx": "3", "numy": "2"}, {"feet": "1"}, {"in_place_supports": "on"}, {"in_place_supports": "on", "feet": "1"}],
+    "HobbyCase": [{"unit_w": "150:215:100", "shelves_n": "1:3:0", "rows": "4"}, {"inset_shelves": "0"}, {"add_rails": "off", "add_cover": "0"}],
+    "SmallPartsTray": [{"sx": "30:50:40"}, {"two_sided": "0"}, {"two_sided": "0", "front_panel": "off"}, {"front_panel": "0"}, {"angle": "30", "rampheight": "0.3"}, {"outside": "0"}],
+    "GridfinityTrayLayout": [{"nx": "1", "ny": "3"}, {"stacking": "1", "h": "3u"}, {"countx": "0", "county": "0"}],
+    "DividerTray": [{"sx": "30:50:40", "sy": "20:60:40"}, {"Slot_angle": "0"}, {"left_wall": "0"}, {"bottom": "1"}, {"bottom": "1", "handle": "1"}, {"outside": "1", "bottom": "1"}, {"sy": "0:40:50:0"}],
+    "TrayInsert": [{"sx": "30:50:40", "sy": "20:60"}, {"x": "200", "y": "130"}, {"draft_angle": "5"}],
+    "GridfinityBase": [{"bottom_edge": "e"}, {"h": "0"}, {"Lid_style": "flat"}, {"Lid_style": "flatbrim"}],
+    "SmallPartsTray2": [{"sx": "30:50:40", "sy": "60:40:50"}, {"back_height": "20"}, {"hi": "20"}, {"outside": "1"}],
+    "PaintStorage": [{"drawer": "1"}, {"additional_bottom": "1", "additional_top": "1"}],
+    "SBCMicroRack": [{"sbcs": "3"}, {"switch": "1"}],
+    "CardHolder": [{"sx": "50:80:60"}, {"angle": "15"}, {"outside": "1"}],
+    "DiscRack": [{"sx": "15*5:25*4"}, {"angle": "30"}],
+    "HingeBox": [{"splitlid": "30"}, {"outside": "1"}, {"lidheight": "35"}],
+    "IntegratedHingeBox": [{"outside": "1"}, {"lidheight": "30", "x": "120"}],
+    # top2 1.2: a layer boundary at 1.5 mm would sit right on a fill sample (0.5 t).
+    "Keypad": [{"top2_enable": "1", "top2_thickness": "1.2"}, {"h": "50"}],
+    "NotesHolder": [{"sx": "40:70:30"}, {"opening": "10"}, {"sx": "40:70:30", "back_openings": "1"}, {"bottom_edge": "f"}],
+    "BrickSorter": [{"level": "bottom"}],
+    "RackBox": [{"outside": "1"}, {"x": "150", "y": "80", "h": "60"}],
+    "Crate": [{"MakeStackable": "0"}, {"x": "150", "y": "220"}],
+    "StackableBin": [{"sx": "40:70:30"}, {"outside": "1"}, {"front": "0.6"}],
+    "BinTray": [{"sx": "40:70:30", "sh": "30:60:45"}, {"outside": "1"}],
+    "Rack19HalfWidth": [{"ru_count": "2", "z": "40"}],
     "TwoPiece": [{"hi": "30"}, {"outside": "1"}, {"play": "0.3"}],
     "SlidingDrawer": [{"hi": "20"}, {"outside": "1"}, {"play": "0.3"}],
     "PenHolderBox": [{"bottom_edge": "h"}, {"plate_gap": "40"}],
@@ -127,9 +164,37 @@ CASES: dict[str, list[dict]] = {
 }
 
 # Problems that come from upstream's design, per generator and BoxStyle-like argument value.
-EXPECTED = {
+EXPECTED = {  # (generator, argument value or None for every case): problems to ignore
     # Front and face have three peg holes, but only two pegs are drawn.
     ("NightLightBox", "extra customizable face"): ("front finger hole", "customizable face finger hole"),
+    # The inner vertical walls list sh bottom to top on their back edge (SlottedEdge(self.sh)),
+    # the back plate and their own front edge top to bottom: uneven rows miss the holes.
+    ("BinTray", "30:60:45"): ("back finger hole", "inner vertical"),
+    # With back_height the front wall is h high (holes too), the sides' front edge and the
+    # inner walls only hi - t*sqrt(2): it sticks out and its upper holes stay empty.
+    # One-sided without front panel: the sides get a plain bottom edge, the floor's finger
+    # joints to them have nothing to go into.
+    ("SmallPartsTray", "off"): ("edge 1 'f'", "edge 3 'f'"),
+    # The back rail is 8 t shorter than the shelf's finger hole line in the back: its end holes
+    # stay empty (any case). Without rails, slots without shelves are empty.
+    ("HobbyCase", None): ("base plate",),
+    ("HobbyCase", "off"): ("finger hole",),
+    # Supports cut inside the shelves' can holes are recorded as part of the shelf.
+    ("SpicesRack", "on"): ("finger hole",),
+    # The slot for the latch (2D) in the rail holder cuts through its middle finger.
+    ("DinRailBox", None): ("(70x8) finger hole", "Back finger hole at 32.0"),
+    ("SmallPartsTray2", "20"): ("front", "side edge 1", "side finger hole", "inner y"),
+    # Without Sturdy the outer supports stand flush with the bottom's edges: their finger holes
+    # touch the outline and become notches.
+    ("HalfBox", None): ("bottom cuts into support",),
+    # Without a back, the inner horizontal walls still have finger joints there.
+    ("TrafficLight", "e"): ("edge 0 'f'",),
+    # Upstream: the inner frames' bottom edge is F but the bottom has finger holes (fit f), their
+    # top edge and the top's are both f, and the bottom's front/back fingers meet the outer
+    # frames' plain (E) bottom edge. The outer frames' top finger holes hold nothing.
+    ("AirPurifier", None): ("top edge", "bottom edge", "bottom finger hole", "edge 0 'F'",
+                            "edge 2 'f'", "edge 2 'h'", "x30) finger hole", "x493) finger hole",
+                            "cuts into bottom", "cuts into top"),
 }
 
 # Generators whose default arguments are degenerate upstream; only CASES are checked.
@@ -144,7 +209,8 @@ OVERLAP_MAX = 0.05
 FINGER_EDGES = set("fFhH")
 # Generators may define finger joints under other chars (FlexBox3's g/G); square ones only.
 FINGER_TYPES = {"FingerJointEdge", "FingerJointEdgeCounterPart", "FingerHoleEdge"}
-# Wall mount joints (b/B fingers, c/C slots) are plain finger joints with the plain wall type.
+# Wall mount joints (b/B fingers, c/C slots; edge classes Wall*) are plain finger joints with the
+# plain wall type. Other generators use b/B for their own edges.
 WALL_EDGES = set("bBcC")
 
 
@@ -313,9 +379,12 @@ def check(name: str, args: dict) -> list[str]:
         for i, e in enumerate(a.rec["edges"]):
             # Composite edges (slotted, compound, ...): only check that nothing cuts in.
             composite = e["char"] is None
-            if not composite and e["char"] not in FINGER_EDGES and not (
+            # A letter of FINGER_EDGES a generator uses for its own edge (KeyHolder's H hook).
+            own = e.get("type") and e["type"] not in FINGER_TYPES
+            if not composite and (e["char"] not in FINGER_EDGES or own) and not (
                     e.get("type") in FINGER_TYPES and e.get("angle") == 90) and not (
-                    e["char"] in WALL_EDGES and args.get("walltype", "plain") == "plain"):
+                    e["char"] in WALL_EDGES and e.get("type", "").startswith("Wall")
+                    and args.get("walltype", "plain") == "plain"):
                 continue
             band = edge_band(a, i)
             if band is None:
@@ -359,7 +428,7 @@ def main(names: list[str]) -> int:
         for args in ([] if name in SKIP_DEFAULTS else [{}]) + CASES.get(name, []):
             problems = check(name, args)
             soft = ("unplaced",) + (("finger hole",) if any(p.startswith("unplaced") for p in problems) else ())
-            soft += sum((v for (n, a), v in EXPECTED.items() if n == name and a in args.values()), ())
+            soft += sum((v for (n, a), v in EXPECTED.items() if n == name and (a is None or a in args.values())), ())
             hard = [p for p in problems if not any(s in p for s in soft)]
             failed += bool(hard)
             print(f"{'FAIL' if hard else 'ok  '} {name} {args or ''}")

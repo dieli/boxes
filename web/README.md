@@ -32,6 +32,8 @@ npm run build    # static site in web/dist/
   `trapezoidSideWall`, `rectangularTriangle`, `flangedWall`, `roundedPlate`, `regularPolygonWall`,
   `polygonWall`), `Boxes.cc` and `Surface.transform` at runtime (no changes to `boxes/`) to record
   each wall: size, edges, label, the helper's shape parameters and where it ended up on the sheet. The cut paths are mapped back into the wall's local frame to get its outline and holes.
+  Paths that miss closing by less than 0.5 mm are closed (e.g. DinRailBox's rail edge is a bit
+  short).
   It also records which functions drew a wall (e.g. `Lid.__call__`, `_TopEdge.drawLid`), so shared
   lid helpers can be recognised in any generator.
 - Parts drawn by hand are recorded too: every `move()` outside a wall helper is a "free" part
@@ -47,17 +49,28 @@ npm run build    # static site in web/dist/
   - `src/py/placements.py`: one small function per generator, plus shared placers for the lids
     from `_TopEdge.drawLid` (top edges f/F/h/Š/Y/E, sliding lid L, hinged lids i/k/v; hinge pins
     stay 2D), `boxes.lids.Lid` (flat, flatbrim, flatfang, overthetop, ontop) and
-    `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces). Placed so far (50):
-    ABox, BasedBox, BeeQueenTransportBox, CardBox, ClosedBox, CompartmentBox, DiceBox, DisplayCase,
-    DrillBox, DrillStand, ElectronicsBox, FlexBox, FlexBox2, FlexBox3, FlexBox4, FlexBox5,
-    GridfinityDrillBox, MagazineFile, NightLightBox, OpenBox, PenHolderBox, RoundedBox, Shadowbox,
-    SlantedTray, SlidingDrawer, SlidingLidBox, StorageRack, StorageShelf, TrayLayout, TwoPiece,
-    TypeTray, UBox,
-    UnevenHeightBox, UniversalBox, WallCaliper, WallChiselHolder, WallConsole, WallDrillBox,
-    WallHook, WallHopper, WallPinRow, WallPlaneHolder, WallPliersHolder, WallRack, WallRollHolder,
-    WallSlottedHolder, WallStackableBin, WallStairs, WallTypeTray, WallWrenchHolder.
-  - Generators without a function show the 2D sheet and a "3D view not implemented yet" note in
-    the 3D panel; walls a function does not place, or that are not
+    `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces). Placed so far (89):
+    ABox, AirPurifier, BasedBox, BeeQueenTransportBox, BinTray, BrickSorter, CardBox,
+    CardHolder, ClosedBox, CoffeeCapsuleHolder, CoinBankSafe, CompartmentBox, Crate, DiceBox,
+    DinRailBox, DiscRack, Dispenser, DisplayCase, DisplayShelf, DividerTray, DrillBox,
+    DrillStand, ElectronicsBox, EuroRackSkiff, FlexBox, FlexBox2, FlexBox3, FlexBox4, FlexBox5,
+    GridfinityBase, GridfinityDrillBox, GridfinityTrayLayout, HalfBox, HingeBox, HobbyCase,
+    IntegratedHingeBox, KeyHolder, Keypad, MagazineFile, MakitaPowerSupply, Matrix,
+    NightLightBox, NotesHolder, OpenBox, PaintStorage, PenHolderBox, PhotoFrame, Rack10Box,
+    Rack19Box, Rack19HalfWidth, RackBox, RollHolder, RoundedBox, SBCMicroRack, Shadowbox,
+    SlantedTray, SlidingDrawer, SlidingLidBox, SmallPartsTray, SmallPartsTray2, SpicesRack,
+    StackableBin, StorageRack, StorageShelf, TrafficLight, TrayInsert, TrayLayout, TwoPiece,
+    TypeTray, UBox, UnevenHeightBox, UniversalBox, WallCaliper, WallChiselHolder, WallConsole,
+    WallDrillBox, WallHook, WallHopper, WallPinRow, WallPlaneHolder, WallPliersHolder, WallRack,
+    WallRollHolder, WallSlottedHolder, WallStackableBin, WallStairs, WallTypeTray,
+    WallWrenchHolder, WineRack.
+  - Parts' own thickness: `place(..., thickness=)` is also used for layers that are not sheet
+    material (PhotoFrame's photo and matting, Matrix's plexiglass).
+  - GridfinityTrayLayout shares TrayLayout's placement but has no Edit handles (its layout
+    follows the Gridfinity grid).
+  - Generators without a function get a flat 3D view: every recorded part extruded and laid out
+    as on the sheet, seen from above (no explode, no Edit). Only generators that record no parts
+    at all show the "3D view not implemented yet" note. Walls a function does not place, or that are not
     drawn through a recorded helper (e.g. ElectronicsBox corner triangles, CompartmentBox's
     one-piece lip), are listed as "2D".
 - `src/view3d.ts` (Three.js, loaded lazily) extrudes the outlines by the material thickness.
@@ -113,7 +126,10 @@ npm run build    # static site in web/dist/
 checks the assembly: at every finger joint (f/F/h, and the b/B/c/C wall-mount joints with the plain
 wall type, and square finger joints a generator defines under other letters) the gaps of one part
 must be filled by another part's fingers, finger holes must be filled, and no two parts may cut
-into each other. Bent flex walls are modelled exactly (arcs and straight pieces). Parts drawn by
+into each other. A letter that is a finger joint elsewhere but a
+generator's own edge (e.g. KeyHolder's hook rail `H`) is not checked as one. Known upstream
+inconsistencies are listed in `EXPECTED`, per generator and argument value (or `None` for every
+case). Bent flex walls are modelled exactly (arcs and straight pieces). Parts drawn by
 hand have no edge information, so for them only finger holes and overlaps are checked. Edges follow the real part shape (slanted trapezoid tops, triangle hypotenuses,
 polygonWall sides); composite edges are only checked for overlap. Generators that are drawn with
 uneven sections (`sx`/`sy`) are checked with asymmetric values, which catches parts mounted the

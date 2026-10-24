@@ -115,8 +115,12 @@ export class AssemblyView {
     });
   }
 
-  /** Rebuilds the model. Keeps the camera unless `refit` (e.g. a different generator). */
-  update(parts: RecordedPart[], placements: Map<number, Placement>, thickness: number, refit: boolean) {
+  /**
+   * Rebuilds the model. Keeps the camera unless `refit` (e.g. a different generator). `flat`:
+   * the parts lie as on the sheet (no assembly), seen more from above.
+   */
+  update(parts: RecordedPart[], placements: Map<number, Placement>, thickness: number, refit: boolean, flat = false) {
+    this.flat = flat;
     this.clear();
     placements.forEach((placement, i) => {
       const part = parts[i];
@@ -450,6 +454,7 @@ export class AssemblyView {
   }
 
   private hasFit = false;
+  private flat = false;
 
   private fit(center: THREE.Vector3, maxDim: number) {
     this.hasFit = true;
@@ -460,7 +465,7 @@ export class AssemblyView {
     // Room for the dimension lines and their labels around the model.
     const radius = ((maxDim * Math.sqrt(3)) / 2) * (this.showDims ? 1.3 : 1);
     const dist = (radius / Math.sin(Math.min(vHalf, hHalf))) * 1.05;
-    const dir = new THREE.Vector3(0.9, -1.6, 1.1).normalize();
+    const dir = (this.flat ? new THREE.Vector3(0.25, -0.9, 2.2) : new THREE.Vector3(0.9, -1.6, 1.1)).normalize();
     this.camera.position.copy(center).addScaledVector(dir, dist);
     this.camera.near = dist / 100;
     this.camera.far = dist * 20;
