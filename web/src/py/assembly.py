@@ -60,6 +60,10 @@ class Part:
         x, y = self.x, self.y
         if rec["helper"] == "polygonWall":
             return _polygon_segments(rec["params"]["borders"], rec["params"]["start"])
+        if rec["helper"] == "regularPolygonWall":
+            prm = rec["params"]
+            n = prm["corners"]
+            return _polygon_segments([prm["side"], 360.0 / n] * n, prm["start"])
         if rec["helper"] == "roundedPlate":
             # Only the straight parts between the rounded corners.
             r = min(rec["params"]["r"], x / 2, y / 2)

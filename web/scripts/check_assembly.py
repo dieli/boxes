@@ -48,6 +48,22 @@ _LAYOUT = """ ,> 40mm
 
 CASES: dict[str, list[dict]] = {
     "DisplayShelf": [{"sx": "100:150:80"}, {"angle": "-20"}, {"include_back": "1", "include_front": "1", "include_bottom": "1"}, {"front_wall_height": "0"}, {"divider_wall_height": "40"}, {"slope_top": "1"}],
+    "BirdHouse": [{"x":"150","y":"120","h":"100","roof_overhang":"0.2"}],
+    "CoinDisplay": [{"outside":"0"},{"angle":"45","coin_plate":"40"}],
+    "Display": [{"angle":"10"}],
+    "BookHolder": [{"ledge_height":"20"},{"angle":"60","back_support":"0","radius":"5"}],
+    "DiceTower": [{"bottom":"0","tray_height":"0"},{"ramps":"4","angle":"40"},{"ramps":"2"}],
+    "Desksign": [{"feet":"1","mirror":"1"},{"angle":"45","height":"60"}],
+    "DoubleFlexDoorBox": [{"radius":"30"},{"x":"150","h":"60"}],
+    "Tetris": [{"shape":"T"},{"shape":"S"},{"shape":"I"},{"shape":"O"}],
+    "Console": [{"front_height":"0"},{"angle":"30","h":"60"},{"y":"50","h":"120"}],
+    "HeartBox": [{"top":"lid"},{"top":"hole","x":"80"}],
+    "RoundedTrapezoidBox": [{"x_back":"40","wall_pieces":"4"},{"top":"lid","radius_back_left":"0"},{"top":"closed","wall_pieces":"1"}],
+    "Coffin": [{"x":"150","h":"40"},{"cross":"0","width":"0.5"}],
+    "RoundedRegularBox": [{"sides":"6","wallpieces":"2"},{"top":"lid"},{"top":"closed","radius":"5"},{"sides":"3","wallpieces":"1"}],
+    "RegularStarBox": [{"n":"3"},{"n":"4","h":"30"},{"outside":"1"}],
+    "RegularBox": [{"n":"4"},{"n":"6","radius_top":"35"},{"radius_top":"70","top":"closed"},{"top":"round lid","bottom":"angled lid"},{"top":"angled lid2","bottom":"hole"},{"top":"angled hole","n":"3"}],
+    "AngledBox": [{"n":"4"},{"n":"2","top":"angled lid"},{"top":"angled lid2"},{"top":"angled hole","n":"1"},{"x":"60","y":"90"},{"bottom_edge":"e"}],
     "CoffeeCapsuleHolder": [{"backplate": "off"}],
     "AirPurifier": [{"split_frames": "off"}, {"filters": "1"}, {"filters": "1", "split_frames": "off", "fan_diameter": "120"}],
     "MakitaPowerSupply": [{"secondary_power": "none"}],
@@ -153,7 +169,9 @@ CASES: dict[str, list[dict]] = {
     "TypeTray": [{"sx": "30:50:70", "sy": "20:60"}, {"top_edge": "f"}, {"bottom_edge": "e"}],
     "TrayLayout": [{"sx": "30:50:70", "sy": "20:60"}, {"outside": "0", "hi": "40"},
                    {"hi": "120"}, {"layout": _LAYOUT}, {"layout": _LAYOUT, "outside": "0"},
-                   {"Lid_style": "flat"}, {"Lid_style": "overthetop"}],
+                   {"Lid_style": "flat"}, {"Lid_style": "overthetop"},
+                   {"fingerholes": "front-and-back", "sx": "30:50:70"}, {"fingerholes": "inside-only", "layout": _LAYOUT},
+                   {"fingerholes": "front", "hi": "40", "FingerHoleEdge_relative_depth": "0.5"}],
     "ClosedBox": [{"x": "60", "y": "120", "h": "40"}],
     "CardBox": [{"openingdirection": "right"}, {"sx": "40:65", "add_lidtopper": "1"}],
     "DiceBox": [{"lidheight": "25"}],
@@ -187,6 +205,10 @@ EXPECTED = {  # (generator, argument value or None for every case): problems to 
     # Without Sturdy the outer supports stand flush with the bottom's edges: their finger holes
     # touch the outline and become notches.
     ("HalfBox", None): ("bottom cuts into support",),
+    # even n leaning inwards: the corner jogs of the G edges graze the neighbour wall (~1%)
+    ("RegularBox", "35"): ("cuts into",),
+    # n=3: the plate corners reach into the rounded ends of the crossing walls' lowered tops
+    ("RegularStarBox", "3"): ("cuts into",),
     # Without a back, the inner horizontal walls still have finger joints there.
     ("TrafficLight", "e"): ("edge 0 'f'",),
     # Upstream: the inner frames' bottom edge is F but the bottom has finger holes (fit f), their

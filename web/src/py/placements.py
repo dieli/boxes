@@ -7,6 +7,7 @@ uses them only needs to call place_lids().
 """
 from __future__ import annotations
 
+import copy
 import math
 from types import SimpleNamespace
 from typing import Callable
@@ -2625,3 +2626,585 @@ def coffee_capsule_holder(a: Assembly) -> None:
     n = len(plates)
     for i, (plate, name) in enumerate(zip(plates, ("front", "middle", "back"))):
         a.place(plate, (0.0, (i - n + 1) * a.t, 0.0), X, Z, Y, name=name)
+
+
+def _ring_walls(a: Assembly, segs, walls, z0: float = 0.0) -> None:
+    """Stands walls on the segments ((x, y), (dx, dy), length) of a counter-clockwise
+    polygon (world xy), inner face on the segment line, material outwards."""
+    for (px, py), (dx, dy), _ in segs:
+        if not walls:
+            return
+        a.place(walls.pop(0), (px, py, z0), (dx, dy, 0.0), Z, (dy, -dx, 0.0))
+
+
+def _centred_plate(a: Assembly, part, z0: float, down: bool = False, name: str = "") -> None:
+    """Lays a plate drawn centred in its move box with its centre on the world z axis."""
+    if part is not None:
+        a.place(part, (-part.x / 2, -part.y / 2, z0), X, Y, neg(Z) if down else Z, name=name)
+
+
+@placement("AngledBox")
+def angled_box(a: Assembly) -> None:
+    """Floor: a (2n+2)-gon stretched to x, walls 1.. around it counter-clockwise from the
+    front long side. World: centre of the floor at the origin, floor z [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h, n = b.x, b.y, b.h, max(1, b.n)
+    if x < y:
+        x, y = y, x
+    if b.outside:
+        x, y = b.adjustSize(x), b.adjustSize(y)
+        if b.top == "none":
+            h = b.adjustSize(h, False)
+        elif "lid" in b.top and b.top != "angled lid":
+            h = b.adjustSize(h) - t
+        else:
+            h = b.adjustSize(h)
+    r, hp, side = b.regularPolygon(2 * n + 2, h=y / 2.0)
+    lx = x - 2 * hp + side if n % 2 else x - 2 * r + side
+    borders = []
+    for length in ([lx] + [side] * n) * 2:
+        borders += [length, 360.0 / (2 * n + 2)]
+    segs = _polygon_segments(borders, (-lx / 2, -y / 2))
+    _ring_walls(a, segs, [p.label(f"wall {i + 1}") for i in range(2 * n + 2)])
+    floors = list(_helper(p, "free"))  # labels are given after drawing: not recorded
+    if b.bottom_edge != "e" and floors:
+        _centred_plate(a, floors.pop(0), 0.0, down=True, name="Bottom")
+    if b.top == "angled lid":
+        _centred_plate(a, floors[0] if floors else None, h - t, name="Lower Lid")
+        _centred_plate(a, floors[1] if len(floors) > 1 else None, h, name="Upper Lid")
+    elif b.top in ("angled hole", "angled lid2"):
+        _centred_plate(a, floors[0] if floors else None, h, name="Top Rim and Lid")
+        _centred_plate(a, floors[1] if len(floors) > 1 else None, h + t, name="Upper Lid")
+    if b.x < b.y or b.outside:  # the lines would show the other/outer parameter
+        return
+    a.dim("x", (-x / 2, -y / 2, 0.0), (x / 2, -y / 2, 0.0), neg(Y))
+    a.dim("y", (x / 2, -y / 2, 0.0), (x / 2, y / 2, 0.0), X)
+    a.dim("h", (-lx / 2, -y / 2, 0.0), (-lx / 2, -y / 2, h), neg(Y))
+
+
+def _polygon_plate(a: Assembly, part, z0: float, down: bool = False, name: str = "") -> None:
+    """Lays a regularPolygonWall with its centre on the world z axis and its first side
+    parallel to x, at the front (-y)."""
+    if part is None:
+        return
+    prm = part.rec["params"]
+    cx, cy = prm["start"][0] + prm["side"] / 2, prm["start"][1] + prm["h"]
+    a.place(part, (-cx, -cy, z0), X, Y, neg(Z) if down else Z, name=name)
+
+
+def _disc(a: Assembly, part, z0: float, name: str = "") -> None:
+    _centred_plate(a, part, z0, name=name)
+
+
+@placement("RegularBox")
+def regular_box(a: Assembly) -> None:
+    """A regular n-gon frustum: bottom (radius_bottom) and top (radius_top) polygons, side
+    walls leaning between them. World: centre of the bottom at the origin, first side at
+    the front, bottom plate z [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    r0, r1, h, n = b.radius_bottom, b.radius_top, b.h, b.n
+    if b.outside:
+        r0 = r0 - t / math.cos(math.radians(360 / (2 * n)))
+        r1 = r1 - t / math.cos(math.radians(360 / (2 * n)))
+        if b.top == "none":
+            h = b.adjustSize(h, False)
+        elif "lid" in b.top and b.top != "angled lid":
+            h = b.adjustSize(h) - t
+        else:
+            h = b.adjustSize(h)
+    r0, sh0, side0 = b.regularPolygon(n, radius=r0)
+    r1, sh1, side1 = b.regularPolygon(n, radius=r1)
+    plates = list(p.where(lambda q: q.rec["helper"] in ("regularPolygonWall", "free")))
+
+    def take(helper):
+        if plates and plates[0].rec["helper"] == helper:
+            return plates.pop(0)
+        return None
+
+    def lids(kind: str, z: float, sign: int) -> None:
+        """drawTop's plates for one end; z is the end's edge line, sign +1 outwards up."""
+        down = sign < 0
+        if kind in ("closed", "hole", "angled hole", "round lid", "angled lid2"):
+            _polygon_plate(a, take("regularPolygonWall"), z, down)
+            if kind == "angled lid2":
+                _polygon_plate(a, take("regularPolygonWall"), z + sign * t, down, "lid")
+            if kind == "round lid":
+                _disc(a, take("free"), z + t if sign > 0 else z - 2 * t, "round lid")
+        elif kind == "angled lid":
+            _polygon_plate(a, take("regularPolygonWall"), z - sign * t, down, "lower lid")
+            _polygon_plate(a, take("regularPolygonWall"), z, down, "upper lid")
+
+    lids(b.bottom, 0.0, -1)
+    if b.top != "bayonet mount":  # its rings stay 2D
+        lids(b.top, h, 1)
+    walls = list(_helper(p, "polygonWall"))
+    for k, wall in enumerate(walls[:n]):
+        ang = math.radians(360.0 * k / n)
+        d = (math.cos(ang), math.sin(ang), 0.0)
+        out = (math.sin(ang), -math.cos(ang), 0.0)
+        p0 = add(add((0.0, 0.0, 0.0), d, -side0 / 2), out, sh0)
+        lf = math.hypot(sh1 - sh0, h)
+        v = add((0.0, 0.0, h / lf), out, (sh1 - sh0) / lf)
+        nn = add((0.0, 0.0, -(sh1 - sh0) / lf), out, h / lf)
+        sx, sy = wall.rec["params"]["start"]
+        a.place(wall, add(add(p0, d, -sx), v, -sy), d, v, nn)
+    a.dim("h", add((0.0, 0.0, 0.0), (0.0, -1.0, 0.0), sh0),
+          add((0.0, 0.0, h), (0.0, -1.0, 0.0), sh1), (0.0, -1.0, 0.0))
+
+
+@placement("RegularStarBox")
+def regular_star_box(a: Assembly) -> None:
+    """Two equal halves (polygon plate + n walls standing on it); the upper one is turned
+    over and by 180/n, so the walls cross into a star and their slots interlock. The lowered
+    middle of each wall's top runs under the other half's plate. World: centre of the lower
+    plate at the origin, lower plate z [-t, 0], upper plate z [h - t, h]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    n = b.n
+    h = b.h  # render stores the adjusted height
+    plates = list(_helper(p, "regularPolygonWall"))
+    walls = list(_helper(p, "rectangularWall"))
+    _, sh, side = b.regularPolygon(n, radius=b.r if b.outside else b.radius)
+    # turning over already shifts an odd polygon by 180/n
+    c, s = (1.0, 0.0) if n % 2 else (math.cos(math.pi / n), math.sin(math.pi / n))
+
+    def turn(v):  # the upper half: over around x, then by 180/n around z
+        x, y, z = v[0], -v[1], -v[2]
+        return (c * x - s * y, s * x + c * y, z)
+
+    for half in range(2):
+        place = _Moved(a, turn, (0.0, 0.0, h - t)).place if half else a.place
+        if len(plates) > half:
+            prm = plates[half].rec["params"]
+            cx, cy = prm["start"][0] + prm["side"] / 2, prm["start"][1] + prm["h"]
+            place(plates[half], (-cx, -cy, 0.0), X, Y, neg(Z), name=("bottom", "top")[half])
+        for k, wall in enumerate(walls[half * n:(half + 1) * n]):
+            ang = 2 * math.pi * k / n
+            d = (math.cos(ang), math.sin(ang), 0.0)
+            out = (math.sin(ang), -math.cos(ang), 0.0)
+            place(wall, add(add((0.0, 0.0, 0.0), d, -side / 2), out, sh), d, Z, out)
+    a.dim("h", (0.0, -sh, -t), (0.0, -sh, h), neg(Y))
+
+
+def _polygon_walls(a: Assembly, pieces, borders, origin, h: float, bottom="F",
+                   symmetrical: bool = True, U=X, V=Y, W=Z) -> None:
+    """Boxes.polygonWalls(borders, h) around a polygonWall(borders) plate whose own frame
+    has its origin at origin and x along U, y along V. The walls rise along W from their
+    lower edge line through origin, inner face on the plate's outline; rounded corners
+    become flex bends.
+    pieces: the wall pieces (unrecorded cuts: stroke bbox frames, so not in drawing order;
+    polygonWalls draws them left to right)."""
+    b = a.box
+    t = a.t
+    pieces = sorted(pieces, key=lambda q: q.rec["matrix"][2])
+    borders = b._closePolygon(list(borders))
+    bottom = b.edges.get(bottom, bottom)
+    ys = b.burn + bottom.spacing()
+    px, py, ang = 0.0, 0.0, 0.0
+    prev = borders[-1]
+    i = 0
+    cnt = 0
+    lc = 0.0  # a concave corner shortens the walls on both sides
+    while i < len(borders) and pieces:
+        start, d0 = (px + math.cos(ang) * lc, py + math.sin(ang) * lc), ang
+        if prev == 0:
+            left = b.edges["d"]
+        else:
+            settings = copy.deepcopy(b.edges["f"].settings)
+            settings.setValues(b.thickness, angle=prev)
+            lf, lF, _ = settings.edgeObjects(b, add=False)
+            left = lF if symmetrical and cnt % 2 == 0 else lf
+        bends = []
+        s = -lc
+        while True:
+            length, turn = float(borders[i]), borders[i + 1]
+            px, py = px + math.cos(ang) * length, py + math.sin(ang) * length
+            s += length
+            i += 2
+            if not isinstance(turn, (list, tuple)):
+                break
+            ta, r = float(turn[0]), max(float(turn[1]), 0.01)
+            bends.append((s, ta, r))
+            # around the centre on the inside
+            dx, dy = math.cos(ang), math.sin(ang)
+            side = 1 if ta > 0 else -1
+            cx, cy = px - dy * r * side, py + dx * r * side
+            vx, vy = px - cx, py - cy
+            q = math.radians(ta)
+            px = cx + math.cos(q) * vx - math.sin(q) * vy
+            py = cy + math.sin(q) * vx + math.cos(q) * vy
+            ang += q
+            s += abs(q) * r
+        ang += math.radians(float(turn))
+        prev = turn
+        lc = t * math.tan(math.radians(-turn / 2)) if turn < 0 else 0.0
+        part = pieces.pop(0)
+        xs = b.burn + left.spacing()
+        d = add(add((0.0, 0.0, 0.0), U, math.cos(d0)), V, math.sin(d0))
+        out = add(add((0.0, 0.0, 0.0), U, math.sin(d0)), V, -math.cos(d0))
+        p0 = add(add(origin, U, start[0]), V, start[1])
+        bend = [(xs + s0, ta, r, 1.0) for s0, ta, r in bends] or None
+        a.place(part, add(add(p0, d, -xs), W, -ys), d, W, out, bend=bend)
+        cnt += 1
+
+
+@placement("RoundedRegularBox", "RoundedTrapezoidBox")
+def rounded_regular_box(a: Assembly) -> None:
+    """Rounded polygon bottom and top (or ring + lid, its corners t larger) with the flex
+    walls around. World: the bottom plate's frame at the origin, bottom z [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    plates = list(_helper(p, "polygonWall"))
+    hole = [q for q in plates if any("holeCB" in c for c in q.callers)]
+    for q in hole:
+        a.scrap(q)
+        plates.remove(q)
+    if not plates:
+        return
+    bottom = plates[0]
+    prm = bottom.rec["params"]
+    sx, sy = prm["start"]
+    a.place(bottom, (0.0, 0.0, 0.0), X, Y, neg(Z), name="bottom")
+    if len(plates) > 1:
+        a.place(plates[1], (0.0, 0.0, b.h), X, Y, Z, name="top")
+    if len(plates) > 2:  # lid: radius + t, edge e, drawn from its own start
+        lp = plates[2].rec["params"]
+        lx, ly = lp["start"]
+        a.place(plates[2], (sx - lx, sy - ly - t, b.h + t), X, Y, Z, name="lid")
+    walls = [q for q in _helper(p, "free")]
+    _polygon_walls(a, walls, prm["borders"], (sx, sy, 0.0), b.h)
+
+
+def _plates_and_walls(a: Assembly, h: float, names=("bottom", "lid")) -> None:
+    """Two polygonWall plates (the second may be drawn mirrored) with polygonWalls(h)
+    between them. World: the bottom's frame at the origin, bottom z [-t, 0]."""
+    p = a.parts
+    plates = list(_helper(p, "polygonWall"))
+    if not plates:
+        return
+    prm = plates[0].rec["params"]
+    sx, sy = prm["start"]
+    a.place(plates[0], (0.0, 0.0, 0.0), X, Y, neg(Z), name=names[0])
+    if len(plates) > 1:
+        a.place(plates[1], (0.0, 0.0, h), X, Y, Z, flip=plates[1].mirrored, name=names[1])
+    _polygon_walls(a, _helper(p, "free"), prm["borders"], (sx, sy, 0.0), h)
+
+
+@placement("Coffin")
+def coffin(a: Assembly) -> None:
+    """Hexagonal bottom and lid (with the cross) and one wall per side, angled finger joints
+    at the corners."""
+    _plates_and_walls(a, a.box.h)
+
+
+@placement("Tetris")
+def tetris(a: Assembly) -> None:
+    """Block outline bottom and top, walls blocksize - 2t high (all outer sizes are full
+    blocks)."""
+    _plates_and_walls(a, a.box.blocksize - 2 * a.t, ("bottom", "top"))
+
+
+@placement("HeartBox")
+def heart_box(a: Assembly) -> None:
+    """Heart top (first) and bottom (drawn mirrored), flex walls around, optional lid t
+    larger all round. World: the top's frame at the origin, bottom z [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    plates = list(_helper(p, "polygonWall"))
+    if len(plates) < 2:
+        return
+    prm = plates[0].rec["params"]
+    sx, sy = prm["start"]
+    a.place(plates[1], (0.0, 0.0, 0.0), X, Y, neg(Z), flip=True, name="bottom")
+    a.place(plates[0], (0.0, 0.0, b.h), X, Y, Z, name="top")
+    if len(plates) > 2:  # its tip (start) is t out along both legs
+        lx, ly = plates[2].rec["params"]["start"]
+        a.place(plates[2], (sx - lx - t, sy - ly - t, b.h + t), X, Y, Z, name="lid")
+    _polygon_walls(a, _helper(p, "free"), prm["borders"], (sx, sy, 0.0), b.h)
+
+
+@placement("Console")
+def console(a: Assembly) -> None:
+    """Two side profiles (depth along y, height along z) with the walls x wide between
+    them. World: left side x [-t, 0], its profile frame's origin at the origin."""
+    b = a.box
+    p = a.parts
+    sides = list(_helper(p, "polygonWall"))
+    if not sides:
+        return
+    prm = sides[0].rec["params"]
+    sx, sy = prm["start"]
+    a.place(sides[0], (0.0, 0.0, 0.0), Y, Z, neg(X), name="left side")
+    if len(sides) > 1:
+        a.place(sides[1], (b.x, 0.0, 0.0), Y, Z, X, name="right side")
+    _polygon_walls(a, _helper(p, "free"), prm["borders"], (0.0, sx, sy), b.x, U=Y, V=Z, W=X)
+
+
+@placement("DoubleFlexDoorBox")
+def double_flex_door_box(a: Assembly) -> None:
+    """Front and back profiles (x by h, rounded, two latches in the middle of the top) with
+    the flex wall y deep around them: from the latch at the top middle to the right, down,
+    along the bottom, up the left and back to the middle. World: profile's inner corner at
+    the origin, front side y [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h, l = b.x, b.y, b.h, b.latchsize
+    r = max(b.radius, 0.01)
+    c4 = math.pi * r / 2
+    sides = list(_helper(p, "free").drawn_by("DoubleFlexDoorBox.flexBoxSide"))
+    if sides:
+        # move box frames: the outline starts t in
+        a.place(sides[0], (-t, 0.0, -t), X, Z, neg(Y), name="front")
+    if len(sides) > 1:
+        a.place(sides[1], (-t, y, -t), X, Z, Y, flip=sides[1].mirrored, name="back")
+    wall = _helper(p, "free").drawn_by("DoubleFlexDoorBox.surroundingWall").first()
+    # After the first latch (l long) the wall runs along the top from x/2 + l; its lower
+    # edge (0.25 t above the frame) is the front's outer face.
+    b1 = (x - 2 * r) / 2
+    b2 = b1 + c4 + h - 2 * r
+    b3 = b2 + c4 + x - 2 * r
+    b4 = b3 + c4 + h - 2 * r
+    a.place(wall, (x / 2, -1.25 * t, h), X, Y, Z, name="flex wall",
+            bend=[(x0, 90, r) for x0 in (b1, b2, b3, b4)])
+
+
+@placement("Desksign")
+def desksign(a: Assembly) -> None:
+    """Sign leaning back by angle, a right triangle on each side in its finger holes.
+    World: the sign's lower front edge along x at the origin."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    ang = math.radians(b.angle)
+    v = (0.0, math.cos(ang), math.sin(ang))
+    a.place(_helper(p, "rectangularWall").first(), (0.0, 0.0, 0.0), X, v,
+            (0.0, -math.sin(ang), math.cos(ang)), name="sign")
+    # the h edges' holes lie just outside the sign's frame
+    tris = list(_helper(p, "rectangularTriangle"))
+    for tri, x0, n in zip(tris, (0.0, b.width), (neg(X), X)):
+        a.place(tri, (x0, 0.0, 0.0), Y, Z, n, flip=tri.mirrored, name="stand")
+    a.dim("width", (0.0, 0.0, 0.0), (b.width, 0.0, 0.0), neg(Y))
+    a.dim("height", (b.width, 0.0, 0.0), add((b.width, 0.0, 0.0), v, b.height), X)
+
+
+class _Moved:
+    """Stands in for an Assembly (e.g. under a BoxFrame) and places everything through
+    a rigid motion: p -> m(p - o) + T, m a function on vectors (rotations only)."""
+
+    def __init__(self, a: Assembly, m, T=(0.0, 0.0, 0.0)) -> None:
+        self._a, self._m, self._T = a, m, T
+
+    def __getattr__(self, k):
+        return getattr(self._a, k)
+
+    def place(self, part, origin, u, v, n, *args, **kw) -> None:
+        m = self._m
+        self._a.place(part, add(m(origin), self._T), m(u), m(v), m(n), *args, **kw)
+
+
+@placement("DiceTower")
+def dice_tower(a: Assembly) -> None:
+    """Tower (inner width x depth x height), front at y = 0 with the exit below the front
+    wall, ramps in the sides' finger holes. The tray (an over-the-top lid) lies open side up
+    in front."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    w, d, h = b.width, b.depth, b.height
+    ang = math.radians(b.angle)
+    f = a.frame(w, d, h)
+    f.dims(x="width", y="depth", h="height")
+    sides = list(p.labelled("side"))
+    if sides:
+        f.right(sides[0])  # drawn mirrored: its front edge (right) comes to y = 0
+    if len(sides) > 1:
+        f.left(sides[1])
+    f.back(p.label("back"))
+    gap = d * math.tan(ang)
+    f.front(p.label("front"), dv=gap)
+    f.bottom(p.label("bottom"), rot=180)  # E edge (the exit) at the front
+
+    def ramp(part, sx, sy, cx, cy):
+        """part's centre plane through the side's finger hole line from (sx, sy) along
+        (cx, cy), side coordinates (x from the back to the front, y up)."""
+        v = (0.0, -cx, cy)
+        n = (0.0, cy, cx) if cx > 0 else (0.0, -cy, -cx)  # upwards
+        o = add((0.0, d - sx, sy), n, -t / 2)
+        a.place(part, o, X, v, n, name="ramp")
+
+    ramps = list(p.labelled("ramp"))
+    lc = 0.5 * t * math.sin(ang)
+    pos_y = (d - lc) * math.tan(ang)
+    if ramps:
+        ramp(ramps.pop(0), lc, pos_y, math.cos(ang), -math.sin(ang))
+    section = (h - pos_y - 4 * t) / max(1, b.ramps - 1)
+    for i in range(b.ramps - 1):
+        if not ramps:
+            break
+        y_i = pos_y + section * (i + 1)
+        if i % 2 == 0:
+            ramp(ramps.pop(0), d - lc, y_i, -math.cos(ang), -math.sin(ang))
+        else:
+            ramp(ramps.pop(0), lc, y_i, math.cos(ang), -math.sin(ang))
+    lid = p.drawn_by("Lid.__call__")
+    top = lid.label("lid top")
+    if top is not None:
+        dl = (top.x - w) / 2
+        ly = h - (t if b.bottom else 2 * t)
+        th = b.tray_height * t
+        # Built as a lid on a box from z = 0, then turned over around x and moved in front.
+        moved = _Moved(a, lambda q: (q[0], -q[1], -q[2]), (0.0, -dl - 2 * t, th))
+        lf = BoxFrame(moved, w + 2 * dl, ly + 2 * dl, th, (-dl, -dl, 0.0), "tray")
+        lf.top(top)
+        lf.front(lid.label("lid front"))
+        lf.back(lid.label("lid back"))
+        lf.left(lid.label("lid left"))
+        lf.right(lid.label("lid right"))
+
+
+@placement("BookHolder")
+def book_holder(a: Assembly) -> None:
+    """Two side profiles (front at y = 0, back at y = their width) with the book back and
+    book bottom plates on their F edges, the back support in their finger holes and the
+    optional ledge below the book bottom's front edge. World: left side x [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    w, r = b.width, b.radius
+    al, be = math.radians(b.angle), math.radians(90 - b.angle)
+    A = b.book_height * math.sin(al)
+    B = b.book_height * math.sin(be)
+    C = b.book_depth * math.sin(be)
+    D = b.book_depth * math.sin(al)
+    hb = A + b.bottom_support + r
+    hf = C + b.bottom_support + r
+    os_, oc = math.sin(al) * r, math.cos(al) * r
+    tw = r + oc + B + D + os_ + r
+    # the side's outline, from its lower front corner counter-clockwise (x to the back)
+    segs = _polygon_segments([tw, 90, hb - oc - r, [90 + b.angle, r], b.book_height, -90,
+                              b.book_depth, [180 - b.angle, r], hf - os_ - r, 90], (0.0, 0.0))
+
+    def world(q):  # side coordinates -> world (x = 0 plane)
+        return (0.0, q[0], q[1])
+
+    sides = list(_helper(p, "free").drawn_by("BookHolder.sideWall"))
+    for side, x0, n in zip(sides, (0.0, w), (neg(X), X)):
+        a.place(side, (x0, 0.0, 0.0), Y, Z, n, name="side")
+    (pa, da, la), (pb, db, lb) = segs[2], segs[3]
+    end_a = (pa[0] + da[0] * la, pa[1] + da[1] * la)
+    end_b = (pb[0] + db[0] * lb, pb[1] + db[1] * lb)
+
+    def inner(d):  # left of travel: into the side
+        return (0.0, -d[1], d[0])
+
+    # book back: bottom edge (f) at its lower end, material inside the profile
+    a.place(p.label("book back"), world(end_a), X, world((-da[0], -da[1])), inner(da))
+    nb = inner(db)
+    bottom = p.label("book bottom")
+    a.place(bottom, world(end_b), X, world((-db[0], -db[1])), nb)
+    if b.back_support > 0:
+        a.place(p.label("back support"), (0.0, tw - 1.5 * t, b.bottom_support), X, Z, neg(Y))
+    ledge = _helper(p, "free").drawn_by("BookHolder.front_ledge").first()
+    if ledge is not None:
+        lh = b.ledge_height
+        a.place(ledge, add(world(end_b), nb, -lh), X, nb, world(db), name="front ledge")
+    a.dim("book_width", (-t, 0.0, 0.0), (w + t, 0.0, 0.0), neg(Y))
+    a.dim("book_height", add(world(end_a), X, w + t), add(world(pa), X, w + t), X)
+
+
+@placement("Display")
+def display(a: Assembly) -> None:
+    """Upright board (y [0, t]) with the shelf plate pushed through its slot at 0.2 h."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, h, r = b.x, b.h, b.radius
+    board = _helper(p, "free").first()
+    a.place(board, (0.0, 0.0, 0.0), X, Z, Y, name="board")
+    # board frame = its outline's bbox: the slot is x/2 right of the lower left corner
+    oh = 1.2 * h - 2 * r
+    hx = x / 2 + (math.sin(math.radians(b.angle)) * oh if b.angle > 0 else 0.0) + b.burn
+    a.place(_helper(p, "roundedPlate").first(), (hx - 0.35 * x, t / 2 - x / 2, 0.2 * h - t / 2),
+            X, Y, Z, name="shelf")
+
+
+@placement("CoinDisplay")
+def coin_display(a: Assembly) -> None:
+    """Closed cube; inside, two sides and a back stand in the bottom's finger holes and hold
+    the coin plate (on top, with the hole) and its base on their slanted top edges."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h = b.x, b.y, b.h
+    if b.outside:
+        x, y, h = b.adjustSize(x), b.adjustSize(y), b.adjustSize(h)
+    f = a.frame(x, y, h)
+    f.dims(x="x", y="y", h="h")
+    f.front(p.label("Wall 1"))
+    f.back(p.label("Wall 3"))
+    f.left(p.label("Wall 2"))
+    f.right(p.label("Wall 4"))
+    f.top(p.label("Top"))
+    f.bottom(p.label("Bottom"))
+    # bottomHoles (in the bottom's coordinates, from the unadjusted x, y); f.bottom has its
+    # local y = 0 at the back
+    bx, by = b.x, b.y
+    cp, cpx, ang = b.coin_plate, b.coin_plate_x, b.angle  # render made angle radians
+    x1 = bx / 2 - 1.5 * t - cp / 2
+    x2 = bx / 2 - 0.5 * t + cp / 2
+    y0 = y - (by / 2 + cpx / 2 - t)  # the sides' holes start here and run to the back
+    y3 = y - (by / 2 - cpx / 2 - 1.5 * t)
+    for side, xc in zip(p.labelled("CoinSide").where(lambda q: q.label != "CoinSide3"), (x1, x2)):
+        a.place(side, (xc + t / 2, y0, 0.0), Y, Z, neg(X), name="coin side")
+    a.place(p.label("CoinSide3"), (bx / 2 - cp / 2 - t, y3 - t / 2, 0.0), X, Z, Y)
+    # plates under the sides' slanted top (high at the front end), stacked in its 2t notch
+    sh = b.coin_showcase_h
+    v = (0.0, -math.cos(ang), math.sin(ang))
+    n = (0.0, -math.sin(ang), -math.cos(ang))
+    o = (x1 + t / 2, y0 + cpx, sh)
+    a.place(p.label("Coin Plate"), o, X, v, n)
+    a.place(p.label("Coin Plate Base"), add(o, n, t), X, v, n)
+
+
+@placement("BirdHouse")
+def bird_house(a: Assembly) -> None:
+    """Gable ends front and back (x wide), long walls left and right (y), floor in all
+    walls' finger holes, two roof halves on the 45 degree gable edges, meeting at the ridge.
+    World: inner corner at the origin, floor z [-t, 0]."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h = b.x, b.y, b.h
+    f = a.frame(x, y, h)
+    f.dims(x="x", y="y", h="h")
+    gables = list(_helper(p, "free").drawn_by("BirdHouse.side"))
+    walls = list(_helper(p, "rectangularWall").where(lambda q: q.chars.startswith("h")))
+    f.left(walls[0] if walls else None)
+    f.right(walls[1] if len(walls) > 1 else None)
+    f.bottom(_helper(p, "rectangularWall").first())
+    if gables:
+        # move box frames: the outline starts t in, its h edge band (ew + t) below z = 0
+        hb = gables[0].y - h - x / 2 - 2 * t
+        a.place(gables[0], (-t, 0.0, -hb), X, Z, neg(Y), name="front")
+        if len(gables) > 1:
+            a.place(gables[1], (x + t, y, -hb), neg(X), Z, Y, name="back")
+    roofs = list(_helper(p, "free").drawn_by("BirdHouse.roof"))
+    roof = 2 ** 0.5 * x / 2
+    oh = roof * b.roof_overhang
+    ridge = (x / 2, 0.0, h + t + x / 2)
+    s = 0.5 ** 0.5
+    # the holes start oh + roof + 2t up the frame (below the ridge edge's own width)
+    y_top = oh + roof + 2 * t
+    for part, side in zip(roofs, (1, -1)):
+        v = (-side * s, 0.0, s)
+        n = (side * s, 0.0, s)
+        o = add(add(ridge, v, -y_top), Y, -(oh + t))
+        a.place(part, o, Y, v, n, name="roof")

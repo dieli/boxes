@@ -49,21 +49,27 @@ npm run build    # static site in web/dist/
   - `src/py/placements.py`: one small function per generator, plus shared placers for the lids
     from `_TopEdge.drawLid` (top edges f/F/h/Š/Y/E, sliding lid L, hinged lids i/k/v; hinge pins
     stay 2D), `boxes.lids.Lid` (flat, flatbrim, flatfang, overthetop, ontop) and
-    `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces). Placed so far (89):
-    ABox, AirPurifier, BasedBox, BeeQueenTransportBox, BinTray, BrickSorter, CardBox,
-    CardHolder, ClosedBox, CoffeeCapsuleHolder, CoinBankSafe, CompartmentBox, Crate, DiceBox,
-    DinRailBox, DiscRack, Dispenser, DisplayCase, DisplayShelf, DividerTray, DrillBox,
-    DrillStand, ElectronicsBox, EuroRackSkiff, FlexBox, FlexBox2, FlexBox3, FlexBox4, FlexBox5,
-    GridfinityBase, GridfinityDrillBox, GridfinityTrayLayout, HalfBox, HingeBox, HobbyCase,
-    IntegratedHingeBox, KeyHolder, Keypad, MagazineFile, MakitaPowerSupply, Matrix,
-    NightLightBox, NotesHolder, OpenBox, PaintStorage, PenHolderBox, PhotoFrame, Rack10Box,
-    Rack19Box, Rack19HalfWidth, RackBox, RollHolder, RoundedBox, SBCMicroRack, Shadowbox,
-    SlantedTray, SlidingDrawer, SlidingLidBox, SmallPartsTray, SmallPartsTray2, SpicesRack,
-    StackableBin, StorageRack, StorageShelf, TrafficLight, TrayInsert, TrayLayout, TwoPiece,
-    TypeTray, UBox, UnevenHeightBox, UniversalBox, WallCaliper, WallChiselHolder, WallConsole,
-    WallDrillBox, WallHook, WallHopper, WallPinRow, WallPlaneHolder, WallPliersHolder, WallRack,
-    WallRollHolder, WallSlottedHolder, WallStackableBin, WallStairs, WallTypeTray,
-    WallWrenchHolder, WineRack.
+    `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces), and
+    `Boxes.polygonWalls` around a `polygonWall` (straight pieces with angled finger joints, rounded
+    corners as flex bends, in any plane). Placed so far (105): ABox, AirPurifier, AngledBox,
+    BasedBox, BeeQueenTransportBox, BinTray, BirdHouse, BookHolder, BrickSorter, CardBox,
+    CardHolder, ClosedBox, CoffeeCapsuleHolder, Coffin, CoinBankSafe, CoinDisplay, CompartmentBox,
+    Console, Crate, Desksign, DiceBox, DiceTower, DinRailBox, DiscRack, Dispenser, Display,
+    DisplayCase, DisplayShelf, DividerTray, DoubleFlexDoorBox, DrillBox, DrillStand, ElectronicsBox,
+    EuroRackSkiff, FlexBox, FlexBox2, FlexBox3, FlexBox4, FlexBox5, GridfinityBase,
+    GridfinityDrillBox, GridfinityTrayLayout, HalfBox, HeartBox, HingeBox, HobbyCase,
+    IntegratedHingeBox, KeyHolder, Keypad, MagazineFile, MakitaPowerSupply, Matrix, NightLightBox,
+    NotesHolder, OpenBox, PaintStorage, PenHolderBox, PhotoFrame, Rack10Box, Rack19Box,
+    Rack19HalfWidth, RackBox, RegularBox, RegularStarBox, RollHolder, RoundedBox, RoundedRegularBox,
+    RoundedTrapezoidBox, SBCMicroRack, Shadowbox, SlantedTray, SlidingDrawer, SlidingLidBox,
+    SmallPartsTray, SmallPartsTray2, SpicesRack, StackableBin, StorageRack, StorageShelf, Tetris,
+    TrafficLight, TrayInsert, TrayLayout, TwoPiece, TypeTray, UBox, UnevenHeightBox, UniversalBox,
+    WallCaliper, WallChiselHolder, WallConsole, WallDrillBox, WallHook, WallHopper, WallPinRow,
+    WallPlaneHolder, WallPliersHolder, WallRack, WallRollHolder, WallSlottedHolder,
+    WallStackableBin, WallStairs, WallTypeTray, WallWrenchHolder, WineRack.
+  - Pieces of an assembly that stand upside down or turned (e.g. DiceTower's tray, the upper
+    half of RegularStarBox) are placed through `_Moved`, which runs a `BoxFrame` (or plain
+    `place` calls) through a rigid motion.
   - Parts' own thickness: `place(..., thickness=)` is also used for layers that are not sheet
     material (PhotoFrame's photo and matting, Matrix's plexiglass).
   - GridfinityTrayLayout shares TrayLayout's placement but has no Edit handles (its layout
@@ -110,6 +116,10 @@ npm run build    # static site in web/dist/
   Generators with neither handles nor compartment lists keep Edit disabled.
 - TypeTray's Edit mode has "Convert to TrayLayout": same grid (sx, sy, h, hi) and the shared
   settings, so single wall pieces and floors can be removed. Browser Back returns to the TypeTray.
+- TrayLayout has TypeTray's `fingerholes` option (and the `FingerHoleEdge` settings): a notch per
+  compartment in the walls along x, outer front/back walls optional. This is a change in
+  `boxes/generators/traylayout.py` (default `none` draws the same as before), so it carries over
+  when converting a TypeTray.
 - Also in Edit mode, inner walls (TypeTray, TrayLayout) can be dragged: the two compartments on
   either side change, their sum stays. The walls on that grid line move live in 3D (a tip shows
   both sizes); Boxes.py re-renders on release. The compartment before the wall snaps to 1 or 5 mm
