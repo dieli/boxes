@@ -35,14 +35,27 @@ class ThrowingArgumentParser(argparse.ArgumentParser):
         raise ArgumentParserError(message)
 
 
-# Same trick as boxesserver: raise on bad args instead of calling sys.exit().
-boxes.ArgumentParser = ThrowingArgumentParser  # type: ignore
-
 _generators = {cls.__name__: cls
                for cls in boxes.generators.getAllBoxGenerators().values()
                if cls.webinterface}
-for _cls in _generators.values():
-    _cls.UI = "web"
+
+
+def _new_box(name: str):
+    """A generator instance as boxesserver makes it: UI "web" (no --input etc.) and an
+    argparser that raises on bad args instead of calling sys.exit(). Both are set only while
+    the instance is built, so other code in the same process (the core tests) is unaffected."""
+    cls = _generators[name]
+    saved = boxes.ArgumentParser, cls.__dict__.get("UI")
+    boxes.ArgumentParser = ThrowingArgumentParser  # type: ignore
+    cls.UI = "web"
+    try:
+        return cls()
+    finally:
+        boxes.ArgumentParser = saved[0]  # type: ignore
+        if saved[1] is None:
+            del cls.UI
+        else:
+            cls.UI = saved[1]
 
 # Arguments the browser UI controls itself.
 _HIDDEN = {"input", "output", "format"}
@@ -139,7 +152,7 @@ def _ramp_settings(args: dict) -> dict | None:
 
 
 def get_schema(name: str) -> str:
-    box = _generators[name]()
+    box = _new_box(name)
     groups = []
     # The first three groups are positionals, "<Generator> Settings" and "Default Settings".
     # Everything after (edge settings, extras) starts collapsed, like the server UI does.
@@ -158,7 +171,7 @@ def get_schema(name: str) -> str:
 
 
 def _render_box(name: str, args_json: str, fmt: str = "svg", join: bool = False, split: bool = False):
-    box = _generators[name]()
+    box = _new_box(name)
     args = json.loads(args_json)
     # Ramps are 3D only: a bad value must not break the 2D drawing (see render_with_parts).
     box._web_ramp = box._web_ramp_error = None

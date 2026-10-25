@@ -1,7 +1,7 @@
+import argparse
 import contextlib
 import io
 import json
-import math
 
 import pytest
 from affine import Affine
@@ -39,6 +39,15 @@ def test_unknown_and_hidden_parameters_are_rejected():
 
 def test_full_option_names_pass():
     assert render("ABox", thickness="4")["thickness"] == 4
+
+
+def test_web_settings_do_not_leak_into_other_code():
+    # The core tests run in the same process (root pytest): TrayLayout must keep --input.
+    render("TrayLayout")
+    from boxes.generators.traylayout import TrayLayout
+    assert TrayLayout.UI == "" and boxes.ArgumentParser is argparse.ArgumentParser
+    assert "--input" in TrayLayout().argparser.format_help()
+    assert "--input" not in bb.get_schema("TrayLayout")
 
 
 @pytest.mark.parametrize("args", [
