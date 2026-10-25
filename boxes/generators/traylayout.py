@@ -40,7 +40,17 @@ class TrayLidSettings(lids.LidSettings):
 class TrayLid(lids.Lid):
     """Lid with an additional "sliding" style that only works with TrayLayout:
     the front wall is lowered by one thickness so a two layer lid can slide in
-    over it; the lower layer locks into finger holes in the raised back wall."""
+    over it; the lower layer locks into finger holes in the raised back wall.
+
+    Both layers span from the outside of the front wall to the back wall; the lower one fits
+    between the side walls (brim_spacing play on each side), the upper one covers them. A handle
+    goes through both layers at the centre, as with the flat lid. Magnet holes in the lower
+    layer sit right behind the front wall in the front corners, for magnets glued to the inside
+    of the front wall (top flush with it) to hold the closed lid."""
+
+    # Finger hole runs in the back wall as (start, length) in lower layer coordinates; set by
+    # TrayLayout when the back wall has gaps. None: one run over the full width.
+    back_runs: list[tuple[float, float]] | None = None
 
     def __call__(self, x: float, y: float, edge=None) -> bool:
         if self.settings.style != "sliding":
@@ -50,28 +60,65 @@ class TrayLid(lids.Lid):
         md = self.magnet_diameter
         w_bot = x - bs * 2
         l_bot = y + t - bs
+        # Both layers end at the back at y - bs and start at -t (outside of the front wall):
+        # the handle slot centre is at (y - bs - t) / 2 from the inside of the front wall.
+        cy = (y - bs - t) / 2
+        grip_w = min(x * 0.35, 30.0)
+        grip = self.handle == "none" and grip_w > 2 * t and y > 4 * t
+        magnets = []
+        if md > 0:
+            m = md / 2 + t  # centre: clear of the lower layer's sides and of the front wall
+            if w_bot < 2 * md + 2 * t or l_bot < md + 2 * t:
+                raise ValueError(f"Lid_magnet_diameter {md:g} mm: the magnet holes do not fit "
+                                 f"into the lid ({w_bot:.1f} x {l_bot:.1f} mm)")
+            # lower layer coordinates; in tray coordinates they span y 0 .. md behind the front wall
+            magnets = [(m, t + md / 2), (w_bot - m, t + md / 2)]
+            if grip and m + md / 2 + bs > x / 2 - grip_w / 2 and md > 1.5 * t:
+                raise ValueError(f"Lid_magnet_diameter {md:g} mm: the magnet holes run into the "
+                                 "grip slot of the lid; use a handle or smaller magnets")
 
         def bottomCB() -> None:
-            self.handleCB(w_bot, l_bot)()
-            if md > 0 and w_bot > 2 * md:
-                m = max(md, 1.5 * t)
-                self.hole(m, m, d=md)
-                self.hole(w_bot - m, m, d=md)
+            if self.handle != "none":
+                with self.saved_context():
+                    self.moveTo(-bs, 0)  # centred on the upper layer
+                    self.handleCB(x, l_bot)()
+            for mx, my in magnets:
+                self.hole(mx, my, d=md)
 
         def topCB() -> None:
             if self.handle != "none":
-                self.handleCB(x, y - bs)()
-            else:
-                grip_w = min(x * 0.35, 30.0)
-                if grip_w > 2 * t and y > 4 * t:
-                    self.rectangularHole(x / 2, 2 * t, grip_w, t, r=t / 2)
+                self.handleCB(x, 2 * cy)()
+            elif grip:
+                self.rectangularHole(x / 2, 2 * t, grip_w, t, r=t / 2)
 
-        self.rectangularWall(w_bot, l_bot, "eefe", callback=[bottomCB],
+        back: str | boxes.edges.BaseEdge = "f"
+        if self.back_runs is not None:
+            back = self.backEdge(w_bot, self.back_runs)
+        self.rectangularWall(w_bot, l_bot, ["e", "e", back, "e"], callback=[bottomCB],
                              move="up", label="lid bottom")
         self.rectangularWall(x, y - bs, "EEeE", callback=[topCB],
                              move="up", label="lid top")
         self.handleParts(x, y)
         return True
+
+    def backEdge(self, length: float, runs: list[tuple[float, float]]) -> boxes.edges.BaseEdge | str:
+        """The lower layer's back edge: fingers where the back wall has finger holes, plain
+        between them. runs as (start, length) from the left; the edge is drawn right to left."""
+        types, lengths = [], []
+        pos = 0.0
+        for start, l in runs:
+            if start > pos:
+                types.append("e")
+                lengths.append(start - pos)
+            types.append("f")
+            lengths.append(l)
+            pos = start + l
+        if pos < length:
+            types.append("e")
+            lengths.append(length - pos)
+        if not lengths:
+            return "e"
+        return boxes.edges.CompoundEdge(self.boxes, types[::-1], lengths[::-1])
 
 
 class TrayLayoutFile(Boxes):
@@ -166,7 +213,8 @@ You can replace the space characters representing the floor by a "X" to remove t
         self.argparser.add_argument(
             "--fingerholes", action="store", type=str, default="none",
             choices=["none", "inside-only", "front", "back", "front-and-back"],
-            help="finger holes in the walls along x; decide which outer walls get them, too")
+            help="finger holes in the walls along x; decide which outer walls get them, too "
+                 "(not the back wall with the sliding lid: the lid locks into it)")
         self.argparser.add_argument(
             "--layout", action="store", type=str, default="\n",
             help="""* Set **sx** and **sy** before editing this!
@@ -249,6 +297,11 @@ a liner glued to the outer wall (no finger joints).
 
         sliding = self.lidSettings.style == "sliding"
         if self.outside:
+            for name, sizes in (("sx", self.x), ("sy", self.y)):
+                adjusted = self.adjustSize(sizes)
+                if any(s > 0 and a <= 0 for s, a in zip(sizes, adjusted)):
+                    raise ValueError(f"Outside size {sum(sizes):g} mm ({name}) is too small "
+                                     f"for the walls in it")
             self.x = self.adjustSize(self.x)
             self.y = self.adjustSize(self.y)
             self.h = self.adjustSize(self.h, e2=False)
@@ -263,6 +316,11 @@ a liner glued to the outer wall (no finger joints).
             self.hi = min(self.hi, self.h - self.thickness) if self.hi else self.h - self.thickness
         else:
             self.hi = self.hi or self.h
+        lowest = self.h - self.thickness if sliding else self.h
+        if lowest <= 0 or self.hi <= 0:
+            raise ValueError("The walls have no height left" +
+                             (" (the sliding lid takes one thickness off the front wall "
+                              "and the inner walls)" if sliding else ""))
         self.edges["s"] = boxes.edges.Slot(self, self.hi / 2.0)
         self.edges["C"] = boxes.edges.CrossingFingerHoleEdge(self, self.hi)
         self.edges["D"] = boxes.edges.CrossingFingerHoleEdge(self, self.hi, outset=self.thickness)
@@ -278,8 +336,10 @@ a liner glued to the outer wall (no finger joints).
         grows by the liner's thickness (the liner stands in it, see liners()).
 
         Sets self.liner: per side ("back", "front": per column; "left", "right": per row) where
-        a liner stands, self.liner_pieces (drawn by liners()) and self.zero_sizes (removed
-        (first, last) row or column per axis) for colIndex() etc."""
+        a liner stands, self.liner_pieces (drawn by liners()), self.zero_sizes (removed
+        (first, last) row or column per axis) for colIndex() etc. and self.layout_x,
+        self.layout_y (the sizes as in the layout, 0 mm entries included; used by the web
+        preview's 3D view)."""
         t = self.thickness
         x, y = list(self.x), list(self.y)
         lx, ly = len(x), len(y)
@@ -376,7 +436,7 @@ a liner glued to the outer wall (no finger joints).
 
     def liners(self) -> None:
         """The liner plates (see removeZeroSizes()): as high as the inner walls, plain edges,
-        finger holes in the top like the inner walls."""
+        finger holes in the top where the outer wall behind them has finger holes."""
         pieces = getattr(self, "liner_pieces", [])
         if not pieces:
             return
@@ -387,17 +447,19 @@ a liner glued to the outer wall (no finger joints).
             for s in p["sizes"]:
                 lengths += [s, t]
             lengths.pop()
+            along_x = p["side"] in ("back", "front")
             top: str | boxes.edges.BaseEdge = "e"
-            if self.fingerholes != "none":
+            # Finger holes only where the outer wall behind has them, too: never on the left
+            # and right (walls along y have none), front and back as hasFingerHoles().
+            if along_x and self.hasFingerHoles(0 if p["side"] == "back" else len(self.y)):
                 top = boxes.edges.CompoundEdge(
                     self, ["Ae"[i % 2] for i in range(len(lengths))], lengths[::-1])
-            along_x = p["side"] in ("back", "front")
             line = self.yLineIndex(0 if p["side"] == "back" else len(self.y)) if along_x else \
                 self.xLineIndex(0 if p["side"] == "left" else len(self.x))
             # The liner stands on the layout line next to the outer one.
             line += 1 if p["side"] in ("back", "left") else -1
 
-            def label(p=p, line=line, lengths=lengths) -> None:
+            def label(p=p, line=line, lengths=lengths, along_x=along_x) -> None:
                 if not self.labels:
                     return
                 pos = 0.0
@@ -432,11 +494,12 @@ a liner glued to the outer wall (no finger joints).
         return 0 if j == 0 else (j + first + last if j == len(self.y) else j + first)
 
     def hasFingerHoles(self, y: int) -> bool:
-        """Do the walls on horizontal grid line y (0 = back) get finger holes."""
+        """Do the walls on horizontal grid line y (0 = back) get finger holes. Not the back
+        wall with the sliding lid: the lid locks into finger holes along its top."""
         if self.fingerholes == "none":
             return False
         if y == 0:
-            return self.fingerholes in ("back", "front-and-back")
+            return self.fingerholes in ("back", "front-and-back") and                 self.lidSettings.style != "sliding"
         if y == len(self.y):
             return self.fingerholes in ("front", "front-and-back")
         return True
@@ -479,10 +542,15 @@ a liner glued to the outer wall (no finger joints).
 
         self.ctx.save()
 
+        # Finger hole runs in the back wall for the sliding lid, see TrayLid.back_runs
+        back_runs: list[tuple[float, float]] = []
+
         # Horizontal Walls
         for y in range(ly + 1):
             h = hy(y)
             is_outer = y in (0, ly)
+            # Notch depth from this wall's height: outer walls can be lower than hi.
+            self.edges["A"].settings.wallheight = 0 if self.fingerholes == "none" else min(h, self.hi)
             if is_outer:
                 # limit finger holes to outer wall height
                 self.edges["C"].height = min(h, self.hi)
@@ -533,6 +601,8 @@ a liner glued to the outer wall (no finger joints).
 
                 wall_len = sum(lengths)
                 bs = self.lidSettings.brim_spacing
+                if sliding and y == 0 and wall_len > 2 * bs:
+                    back_runs.append((sum(self.x[:start]) + start * t, wall_len - 2 * bs))
 
                 def hwallCB(s=start, e=end, row=y, wl=wall_len) -> None:
                     self.wallLabelsCB(s, e, row)
@@ -614,6 +684,9 @@ a liner glued to the outer wall (no finger joints).
 
         self.ctx.restore()
         self.rectangularWall(10, max(self.h, self.hi), "ffef", move="up only")
+        if isinstance(self.lid, TrayLid):
+            self.lid.back_runs = None if all(self.hwalls[0]) else back_runs
+        self.edges["A"].settings.wallheight = 0 if self.fingerholes == "none" else self.hi
         self.liners()
 
     def base_plate(self, callback=None, move=None):
