@@ -320,6 +320,8 @@ function setEditMode(on: boolean) {
   editMode = on && !modeEditBtn.disabled;
   modeViewBtn.classList.toggle("active", !editMode);
   modeEditBtn.classList.toggle("active", editMode);
+  modeViewBtn.setAttribute("aria-pressed", String(!editMode));
+  modeEditBtn.setAttribute("aria-pressed", String(editMode));
   editHint.hidden = !editMode;
   convertBtn.hidden = !editMode || current !== "TypeTray";
   snapCtl.hidden = !editMode || !hasLines;
@@ -573,6 +575,13 @@ function buildPartsList(parts: RecordedPart[]) {
       li.append(Object.assign(document.createElement("span"), { className: "note", textContent: "2D" }));
     }
     li.addEventListener("click", () => select(p.part === selected ? null : p.part));
+    // Keyboard: Tab to a part, Enter or Space selects it (as a click).
+    li.tabIndex = 0;
+    li.addEventListener("keydown", (ev) => {
+      if (ev.target !== li || (ev.key !== "Enter" && ev.key !== " ")) return;
+      ev.preventDefault();
+      li.click();
+    });
     return li;
   });
   partsList.replaceChildren(...rows);
@@ -606,6 +615,7 @@ function select(part: number | null) {
 function applySelectionList() {
   for (const li of partsList.children as HTMLCollectionOf<HTMLElement>) {
     li.classList.toggle("selected", li.dataset.part === String(selected));
+    li.setAttribute("aria-current", String(li.dataset.part === String(selected)));
   }
   partsList.querySelector("li.selected")?.scrollIntoView({ block: "nearest" });
 }

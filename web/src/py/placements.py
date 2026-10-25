@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import math
 from types import SimpleNamespace
-from typing import Callable
+from collections.abc import Callable
 
 from assembly import Assembly, BoxFrame, add, X, Y, Z, _polygon_segments, neg, positions
 

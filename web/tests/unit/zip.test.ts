@@ -19,6 +19,9 @@ function readZip(buf: ArrayBuffer) {
     const local = v.getUint32(p + 42, true);
     const name = dec.decode(new Uint8Array(buf, p + 46, nameLen));
     expect(v.getUint32(local, true)).toBe(0x04034b50);
+    // A valid DOS date (1980-01-01) in both headers, not 0.
+    expect(v.getUint16(p + 14, true)).toBe(0x21);
+    expect(v.getUint16(local + 12, true)).toBe(0x21);
     const dataStart = local + 30 + v.getUint16(local + 26, true);
     out.push({ name, crc, data: dec.decode(new Uint8Array(buf, dataStart, size)) });
     p += 46 + nameLen;

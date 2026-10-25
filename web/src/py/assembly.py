@@ -16,7 +16,7 @@ A placement function (see placements.py) gets an Assembly and puts parts into it
 from __future__ import annotations
 
 import math
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 Vec = tuple[float, float, float]
 
@@ -114,29 +114,29 @@ def _called(part: Part, func: str) -> bool:
 class Parts(list):
     """List of parts with small query helpers. Queries skip parts that are already placed."""
 
-    def where(self, pred: Callable[[Part], bool]) -> "Parts":
+    def where(self, pred: Callable[[Part], bool]) -> Parts:
         return Parts(p for p in self if not p.placed and pred(p))
 
     def label(self, name: str) -> Part | None:
         """First unplaced part with exactly this label."""
         return next(iter(self.where(lambda p: p.label == name)), None)
 
-    def labelled(self, prefix: str) -> "Parts":
+    def labelled(self, prefix: str) -> Parts:
         return self.where(lambda p: p.label.startswith(prefix))
 
-    def unlabelled(self) -> "Parts":
+    def unlabelled(self) -> Parts:
         return self.where(lambda p: not p.label)
 
-    def drawn_by(self, func: str) -> "Parts":
+    def drawn_by(self, func: str) -> Parts:
         """Parts drawn (directly or indirectly) by a function, e.g. "_TopEdge.drawLid".
         Also matches subclasses that keep the method name ("BeeQueenTransportBoxLid.__call__"
         for "Lid.__call__")."""
         return self.where(lambda p: _called(p, func))
 
-    def not_drawn_by(self, *funcs: str) -> "Parts":
+    def not_drawn_by(self, *funcs: str) -> Parts:
         return self.where(lambda p: not any(_called(p, f) for f in funcs))
 
-    def edges(self, chars: str) -> "Parts":
+    def edges(self, chars: str) -> Parts:
         return self.where(lambda p: p.chars == chars)
 
     def first(self) -> Part | None:
@@ -253,7 +253,7 @@ class Assembly:
         self.handles.append({"kind": kind, "i": i, "j": j, "on": bool(on), "min": lo, "max": hi})
 
     def frame(self, x: float, y: float, h: float, origin: Vec = (0.0, 0.0, 0.0),
-              name: str = "") -> "BoxFrame":
+              name: str = "") -> BoxFrame:
         return BoxFrame(self, x, y, h, origin, name)
 
 
@@ -388,7 +388,7 @@ class BoxFrame:
             self.asm.line(arg, k, given, lo, hi, d, scale, label, axis)
 
     def sub(self, x0: float, y0: float, z0: float, x: float, y: float, h: float,
-            name: str | None = None) -> "BoxFrame":
+            name: str | None = None) -> BoxFrame:
         return BoxFrame(self.asm, x, y, h, self.at(x0, y0, z0), self.name if name is None else name)
 
 

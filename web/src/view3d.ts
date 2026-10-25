@@ -417,6 +417,8 @@ export class AssemblyView {
     input.dataset.key = key;
     input.value = formatMm(dim.value);
     input.size = Math.max(3, input.value.length);
+    // Width without CSS field-sizing (Firefox, older Safari).
+    input.addEventListener("input", () => (input.size = Math.max(3, input.value.length)));
     input.title = "Enter to apply, ↑/↓ to step (Shift: 10)";
     const min = dim.index !== null && dim.values ? minSize(dim.axis, dim.index, dim.values.length) : 1;
     const commit = () => {

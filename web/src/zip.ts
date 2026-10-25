@@ -16,6 +16,9 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+/** 1980-01-01, the earliest DOS date: 0 is no valid date and some tools show it as such. */
+const DOS_DATE = 0x21;
+
 export function zipStore(files: { name: string; data: Uint8Array<ArrayBuffer> }[]): Blob {
   const enc = new TextEncoder();
   const chunks: BlobPart[] = [];
@@ -29,6 +32,7 @@ export function zipStore(files: { name: string; data: Uint8Array<ArrayBuffer> }[
     local.setUint16(4, 20, true); // version needed
     local.setUint16(6, 0x0800, true); // UTF-8 names
     local.setUint16(8, 0, true); // stored
+    local.setUint16(12, DOS_DATE, true); // time 00:00 (offset 10 stays 0)
     local.setUint32(14, crc, true);
     local.setUint32(18, data.length, true);
     local.setUint32(22, data.length, true);
@@ -39,6 +43,7 @@ export function zipStore(files: { name: string; data: Uint8Array<ArrayBuffer> }[
     dir.setUint16(4, 20, true);
     dir.setUint16(6, 20, true);
     dir.setUint16(8, 0x0800, true);
+    dir.setUint16(14, DOS_DATE, true);
     dir.setUint32(16, crc, true);
     dir.setUint32(20, data.length, true);
     dir.setUint32(24, data.length, true);
