@@ -66,13 +66,17 @@ type RenderRequest = {
  *
  * A request that runs longer than `timeoutMs`, or a worker that dies, rejects the pending
  * requests and starts a fresh worker (reloading Python takes a few seconds); requests made
- * meanwhile wait for it. A worker that fails while loading is not restarted.
+ * meanwhile wait for it. The worker answers in order, so the time limit applies to the oldest
+ * pending request, from when the one before it was answered. A worker that fails while loading
+ * is not restarted: the first one rejects `ready`, a replacement calls `onRestartFailed`.
  */
 export class BoxesClient {
   readonly ready: Promise<ReadyInfo>;
   onStatus: (text: string) => void = () => {};
   /** The worker was replaced (reason given); the new one reports progress through onStatus. */
   onRestart: (reason: string) => void = () => {};
+  /** The replacement worker failed to load; every request fails from now on. */
+  onRestartFailed: (error: Error) => void = () => {};
   timeoutMs = 30_000;
 
   private worker!: Worker;
@@ -81,6 +85,7 @@ export class BoxesClient {
   private pending = new Map<number, Pending>();
   private rendering = false;
   private queued: RenderRequest | null = null;
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private wheelBase: string,
@@ -126,9 +131,10 @@ export class BoxesClient {
     const error = new BoxesError(reason, reason);
     const pending = [...this.pending.values()];
     this.pending.clear();
+    this.armTimer();
     this.start().then(
       () => this.onStatus("Python restarted"),
-      () => {}, // a failed restart rejects the requests that wait for it
+      (e: Error) => this.onRestartFailed(e), // also rejects the requests that wait for it
     );
     this.onRestart(reason);
     for (const p of pending) p.reject(error);
@@ -178,18 +184,22 @@ export class BoxesClient {
       () =>
         new Promise<T>((resolve, reject) => {
           const id = this.nextId++;
-          const worker = this.worker;
-          const timer = setTimeout(
-            () => this.restart(worker, `Stopped after ${this.timeoutMs / 1000} s: the generator took too long. Restarting Python…`),
-            this.timeoutMs,
-          );
-          const done = () => clearTimeout(timer);
-          this.pending.set(id, {
-            resolve: (v) => (done(), resolve(v as T)),
-            reject: (e) => (done(), reject(e)),
-          });
-          worker.postMessage(build(id));
+          this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+          if (this.pending.size === 1) this.armTimer();
+          this.worker.postMessage(build(id));
         }),
+    );
+  }
+
+  /** Starts the time limit for the oldest pending request (the one the worker is running). */
+  private armTimer() {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!this.pending.size) return;
+    const worker = this.worker;
+    this.timer = setTimeout(
+      () => this.restart(worker, `Stopped after ${this.timeoutMs / 1000} s: the generator took too long. Restarting Python…`),
+      this.timeoutMs,
     );
   }
 
@@ -198,6 +208,7 @@ export class BoxesClient {
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
+    this.armTimer();
     if (msg.type === "error") p.reject(new BoxesError(msg.message, msg.detail));
     else if (msg.type === "schema") p.resolve(msg.schema);
     else if (msg.type === "exported") p.resolve(msg.content);

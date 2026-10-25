@@ -39,6 +39,10 @@ client.onRestart = (reason) => {
   statusEl.textContent = "Restarting Python…";
   console.warn(reason);
 };
+client.onRestartFailed = (e) => {
+  statusEl.textContent = "Python could not restart: reload the page";
+  showError(e);
+};
 
 let generatorGroups: GeneratorGroup[] = [];
 let generatorList: GeneratorInfo[] = [];

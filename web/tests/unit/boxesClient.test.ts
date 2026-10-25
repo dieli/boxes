@@ -122,6 +122,40 @@ describe("BoxesClient", () => {
     expect(FakeWorker.all).toHaveLength(1);
   });
 
+  test("the time limit starts when the request before is answered", async () => {
+    vi.useFakeTimers();
+    const client = new BoxesClient("w/", "p/");
+    client.timeoutMs = 1000;
+    const w = FakeWorker.all[0];
+    w.ready();
+    const r = client.render("ABox", {});
+    const e = client.exportFormat("ABox", {}, "svg");
+    await vi.advanceTimersByTimeAsync(800);
+    w.reply(rendered(w.last("render")));
+    await vi.advanceTimersByTimeAsync(800); // 1600 ms after posting, 800 ms running
+    w.reply({ type: "exported", id: w.last("export"), content: "<svg/>" });
+    await expect(r).resolves.toMatchObject({ svg: "<svg/>" });
+    await expect(e).resolves.toBe("<svg/>");
+    expect(w.terminated).toBe(false);
+  });
+
+  test("a failed restart is reported and fails the requests that wait for it", async () => {
+    const client = new BoxesClient("w/", "p/");
+    const failed: string[] = [];
+    client.onRestartFailed = (err) => failed.push(err.message);
+    const w = FakeWorker.all[0];
+    w.ready();
+    const r = client.schema("ABox");
+    await tick();
+    w.crash();
+    await expect(r).rejects.toThrow(/crashed/);
+    const next = client.schema("ABox");
+    FakeWorker.all[1].crash("no network");
+    await expect(next).rejects.toThrow(/no network/);
+    expect(failed).toEqual(["The Python worker crashed: no network"]);
+    expect(FakeWorker.all).toHaveLength(2);
+  });
+
   test("a crash after loading fails the pending requests and restarts", async () => {
     const client = new BoxesClient("w/", "p/");
     const w = FakeWorker.all[0];
