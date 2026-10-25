@@ -120,6 +120,8 @@ class WineRack(Boxes):
 
         if self.walls == "minimal":
             tc -= 2 * (cy//2) # roofs of outer cells
+            if cy % 2:
+                tc -= 2 * cx # no roofs on the top row
 
         if cy % 2:
             if self.walls == "all":

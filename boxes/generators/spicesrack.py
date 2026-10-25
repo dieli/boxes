@@ -166,7 +166,9 @@ class SpicesRack(Boxes):
 
 
         if not self.in_place_supports:
-            self.partsMatrix((self.numx-1)*self.numy, self.numx-1, "up",
+            # The feet take the place of the lowest shelf's supports.
+            rows = self.numy - 1 if self.feet else self.numy
+            self.partsMatrix((self.numx-1)*rows, self.numx-1, "up",
                              self.support, inner_width, (self.h-t)/2)
         if self.feet:
             self.partsMatrix(self.numx-1, self.numx-1, "up",
