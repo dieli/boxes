@@ -1470,6 +1470,9 @@ def u_box(a: Assembly) -> None:
         e0 = b.edges.get(back, back).spacing()
         a.place(wall, (-t, 0.0, h + e0), neg(Z), X, neg(Y), name="flex wall",
                 bend=[(e0 + h - r, 90, r), (e0 + h - r + cl + y - 2 * r, 90, r)])
+        # Hinged lids (i, k): the flush hinges' pin slots are drawn inside the wall's eyes.
+        for scrap in p.where(lambda q: q.label == "wall"):
+            a.scrap(scrap)
     w = b.edges["f"].spacing()
     # The U is symmetric front to back: the left one is turned to be seen from outside.
     a.place(p.label("left"), (0.0, y + w, -w), neg(Y), Z, neg(X))
@@ -1591,16 +1594,22 @@ def tray_layout(a: Assembly) -> None:
 
 @placement("GridfinityTrayLayout")
 def gridfinity_tray_layout(a: Assembly) -> None:
-    """TrayLayout with a generated layout; the pads go under the corner grid cells. Its layout
-    text is not edited from 3D (the UI does that for TrayLayout only)."""
+    """TrayLayout with a generated layout; the pads (one per cell, up to 4) go under the corner
+    grid cells, or spread along a grid one cell wide. Its layout text is not edited from 3D
+    (the UI does that for TrayLayout only)."""
     b = a.box
     t = a.t
     _tray_layout(a, editable=False)
     foot = b.opening - b.opening_margin
     p = b.pitch
     c0 = -t - b.margin / 2 + p / 2  # first cell centre, like baseplate_etching
-    cells = [(c0 + i * p, c0 + j * p) for i in sorted({0, b.nx - 1}) for j in sorted({0, b.ny - 1})]
     pads = a.parts.drawn_by("GridfinityTrayLayout.generatePad")
+    n = max(b.nx, b.ny)
+    if min(b.nx, b.ny) == 1 and len(pads) > 1:
+        steps = [round(k * (n - 1) / (len(pads) - 1)) for k in range(len(pads))]
+        cells = [(c0 + k * p, c0) if b.nx > 1 else (c0, c0 + k * p) for k in steps]
+    else:
+        cells = [(c0 + i * p, c0 + j * p) for i in sorted({0, b.nx - 1}) for j in sorted({0, b.ny - 1})]
     for cx, cy in cells:
         a.place(pads.first(), (cx - foot / 2, cy - foot / 2, -t), X, Y, neg(Z), name="pad")
 
@@ -1869,9 +1878,11 @@ _FACES = {  # inner corner, along the wall, inwards
 
 
 def _stabilizers(a: Assembly, f: BoxFrame, walls: list[tuple]) -> None:
-    """Strips drawn by stackable (s) bottom edges, glued to the inside of the wall below the
-    bottom plate, centred. walls: (wall part, face); each wall's strip is drawn right after it."""
-    strips = list(a.parts.drawn_by("StackableBaseEdge.__call__"))
+    """Strips drawn by stackable (s) bottom edges, or the lips of finger hole (h) bottom edges
+    (FingerJointSettings bottom_lip), glued to the inside of the wall below the bottom plate,
+    centred. walls: (wall part, face); each wall's strip is drawn right after it."""
+    strips = sorted([*a.parts.drawn_by("StackableBaseEdge.__call__"),
+                     *a.parts.drawn_by("FingerHoleEdge.__call__")], key=lambda s: s.index)
     t = a.t
     for wall, face in walls:
         if wall is None:
@@ -1925,6 +1936,11 @@ def stackable_bin(a: Assembly) -> None:
     for x0, wall in zip(positions(b.sx, t), p.labelled("divider")):
         f.inner_y(wall, x0)
     _retainer(a, p.label("retainer"), 0.0, 0.0)
+    # The optional label strip: glued flat on the retainer's outside along its bottom edge, a
+    # ledge for a label card.
+    s = 0.5 ** 0.5
+    a.place(p.label("for label (optional)"), (0.0, -s * t, -s * t), X, (0.0, -s, s), (0.0, -s, -s),
+            name="label ledge")
     _stabilizers(a, f, [(back, "back"), (left, "left"), (right, "right")])
 
 
@@ -2194,7 +2210,9 @@ def paint_storage(a: Assembly) -> None:
 
 @placement("SBCMicroRack")
 def sbc_micro_rack(a: Assembly) -> None:
-    """Two stackable sides (drawn top down), a bottom and one plate per board."""
+    """Two stackable sides (drawn top down), a bottom and one plate per board. With switch, a
+    third side stands outside the second one, held by the dowel through their stable holes;
+    the switch's width is not a parameter, so it gets a board's clearance (clearance_z)."""
     b = a.box
     t = a.t
     hd = b.hole_dist_edge
@@ -2209,6 +2227,8 @@ def sbc_micro_rack(a: Assembly) -> None:
         return
     a.place(sides[0], f.at(0, 0, H), neg(Z), Y, neg(X), name="side")
     a.place(sides[1], f.at(w, 0, H), neg(Z), Y, X, name="side")
+    if b.switch:
+        a.place(sides[2], f.at(w + t + b.clearance_z, 0, H), neg(Z), Y, X, name="switch holder")
     a.place(plates[0], f.at(0, 0, 0), X, Y, neg(Z), name="bottom")
     for i, plate in enumerate(plates[1:]):
         z = H - (hp * i + hp / 2 + 1.5)
@@ -2411,6 +2431,19 @@ def divider_tray(a: Assembly) -> None:
     place_lids(a, f, None)
 
 
+def _divider_foot(a: Assembly, foot, o: Vec) -> None:
+    """A SmallPartsTray divider foot standing in the y-z plane, material in [o.x, o.x + t],
+    its long side from o along y. Drawn as a right triangle with that side on the diagonal
+    x = y: the apex on one side of it or the other (the two feet of a pair are mirrored)."""
+    if foot is None:
+        return
+    s = 0.5 ** 0.5
+    if sum(q[0] - q[1] for q in foot.rec["outline"]["outer"]) > 0:  # apex at x > y
+        a.place(foot, add(o, X, a.t), (0.0, s, s), (0.0, s, -s), neg(X), name="divider foot")
+    else:
+        a.place(foot, o, (0.0, s, -s), (0.0, s, s), X, name="divider foot")
+
+
 @placement("SmallPartsTray")
 def small_parts_tray(a: Assembly) -> None:
     """Ramps up to the side walls' ends (both ends if two_sided, else the front), a floor in
@@ -2448,9 +2481,14 @@ def small_parts_tray(a: Assembly) -> None:
         a.place(next(rw, None), f.at(0, y - ramp_y, 0), X, (0.0, c, s), (0.0, s, -c), name="ramp")
         if b.front_panel:
             a.place(next(rw, None), f.at(0, y, ramp_h), X, Z, Y, name="back panel")
+        feet = iter(list(p.drawn_by("SmallPartsTray.render_simple_tray_divider_feet")))
         for x0, div in zip([0.0] + [q + t for q in positions(sx, t)],
-                           p.drawn_by("SmallPartsTray.render_simple_tray_divider")):
+                           list(p.drawn_by("SmallPartsTray.render_simple_tray_divider"))):
             a.place(div, f.at(x0, (y + t) / 2, 0), X, Z, neg(Y), name="divider")
+            # Two feet per divider, across it under its raised ends: triangles drawn at 45 deg,
+            # their long side (5 t) on the floor, the divider in the t wide slot at the top.
+            for x1 in (x0, x0 + div.x - t):
+                _divider_foot(a, next(feet, None), f.at(x1, y / 2 - 2.5 * t, 0))
     else:
         a.place(next(rw, None), f.at(0, ramp_y, 0), X, Y, neg(Z), name="bottom")
         a.place(next(rw, None), f.at(0, y, 0), X, Z, Y, name="back")

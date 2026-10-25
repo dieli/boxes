@@ -332,16 +332,8 @@ EXPECTED = {  # (generator, (argument, value) or None for every case): problems 
     ("RollHolder", None): (_2D_UNLABELLED,),  # axle rings
     ("WallRollHolder", None): (_2D_UNLABELLED,),  # axle rings
     ("TrafficLight", None): (_2D + "colored windows",),
-    # Known gaps: parts the placement map does not place yet (to be fixed, then removed here).
-    ("Crate", ("MakeStackable", "0")): (_2D_UNLABELLED,),  # 4 strips, 6 wide
-    ("GridfinityTrayLayout", ("ny", "3")): (_2D_UNLABELLED,),  # one 36x36 pad
-    ("SBCMicroRack", ("switch", "1")): (_2D_UNLABELLED,),  # a 170.5x63 plate
-    ("SmallPartsTray", None): (_2D_UNLABELLED,),  # 3 squares of 10.6x10.6
-    ("SpicesRack", ("feet", "1")): (_2D_UNLABELLED,),  # 4 feet
-    ("StackableBin", None): (_2D + "for label (optional)",),
-    ("UBox", ("top_edge", "i")): (_2D + "wall",),
-    ("UBox", ("top_edge", "k")): (_2D + "wall",),
-    ("WineRack", ("walls", "minimal")): (_2D_UNLABELLED,),  # 8 plates of 54.8x210
+    # The switch holder is a copy of the sides: its finger holes for the bottom stay empty.
+    ("SBCMicroRack", ("switch", "1")): ("#3 (170.5x63) finger hole",),
 }
 
 # Generators whose default arguments are degenerate upstream; only CASES are checked.
