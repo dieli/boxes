@@ -209,25 +209,51 @@ def type_tray(a: Assembly) -> None:
     outer = {"front": lambda i, j: j == ly - 1, "back": lambda i, j: j == 0,
              "left": lambda i, j: i == 0, "right": lambda i, j: i == lx - 1}
     side = (getattr(b, "_web_ramp", None) or {}).get("side", "front")
+    # Finger holes: inner walls along x always (if any), outer front/back only when chosen.
+    holes = side in ("front", "back") and b.fingerholes != "none"
+
+    def hole(i: int, j: int) -> bool:
+        if not holes or not outer[side](i, j):
+            return holes
+        return not b.closedtop and b.fingerholes in (side, "front-and-back")
+
     _card_ramps(a, [(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j],
-                     b.h if outer[side](i, j) else (b.hi or b.h))
+                     b.h if outer[side](i, j) else (b.hi or b.h), hole(i, j))
                     for j in range(ly) for i in range(lx)])
 
 
-def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float]]) -> None:
+#: Ramp height for "auto" at walls without a finger hole (the former default).
+RAMP_HEIGHT_NO_HOLE = 15.0
+
+
+def _finger_hole_depth(box) -> float:
+    """Depth of the finger holes (FingerHoleEdge "A", from the top of the wall), 0 if none."""
+    s = getattr(getattr(box, "edges", {}).get("A"), "settings", None)
+    if s is None or not getattr(s, "wallheight", 0):
+        return 0.0
+    return min(s.absolute_depth + s.wallheight * s.relative_depth, s.wallheight)
+
+
+def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float, bool]]) -> None:
     """Printed wedges so cards slide up and out, when the user turned them on (box._web_ramp:
-    side, height, angle; see boxes_bridge). cells: (x0, x1, y0, y1, wall height) of each
-    compartment with a floor and a wall on the ramp side. A ramp fills the compartment's width,
-    leans against that wall and rises from the floor at the given angle."""
+    side, height, angle; see boxes_bridge). cells: (x0, x1, y0, y1, wall height, finger hole)
+    of each compartment with a floor and a wall on the ramp side. A ramp fills the
+    compartment's width, leans against that wall and rises from the floor at the given angle.
+    Height None ("auto"): up to the bottom of the wall's finger hole, so a card lying on the
+    ramp can be gripped through the hole."""
     r = getattr(a.box, "_web_ramp", None)
     if not r:
         return
     side = r["side"]
     tan = math.tan(math.radians(min(max(r["angle"], 5.0), 85.0)))
-    for k, (x0, x1, y0, y1, wall) in enumerate(cells, 1):
+    hole_depth = _finger_hole_depth(a.box)
+    for k, (x0, x1, y0, y1, wall, hole) in enumerate(cells, 1):
         along_y = side in ("front", "back")
         depth, width = (y1 - y0, x1 - x0) if along_y else (x1 - x0, y1 - y0)
-        h = min(r["height"], wall)
+        height = r["height"]
+        if height is None:
+            height = wall - hole_depth if hole and hole_depth > 0 else RAMP_HEIGHT_NO_HOLE
+        h = min(height, wall)
         length = h / tan
         if length > depth:
             length, h = depth, depth * tan
@@ -1605,6 +1631,7 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
     t = b.thickness
     lx, ly = len(b.x), len(b.y)
     hi = b.hi or b.h
+    sliding = getattr(getattr(b, "lidSettings", None), "style", None) == "sliding"
     liner = getattr(b, "liner", {})
 
     def has(side: str, k: int) -> bool:
@@ -1628,8 +1655,15 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
         line = (lambda j: j + 1) if r["side"] == "front" else (lambda j: j)
         for j in range(ly):
             ok = [b.floors[j][i] and b.hwalls[line(j)][i] for i in range(lx)]
-            # A liner on the outer wall is only as high as the inner walls.
-            wall = b.h if line(j) in (0, ly) and not any(has(r["side"], k) for k in range(lx)) else hi
+            # A liner on the outer wall is only as high as the inner walls, and like them it
+            # has finger hole notches.
+            on_liner = line(j) in (0, ly) and any(has(r["side"], k) for k in range(lx))
+            if line(j) in (0, ly) and not on_liner:
+                # The sliding lid raises the back wall and lowers the front wall by t.
+                wall = b.h + (0.0 if not sliding else t if line(j) == 0 else -t)
+            else:
+                wall = hi
+            hole = b.fingerholes != "none" if on_liner else b.hasFingerHoles(line(j))
             i = 0
             while i < lx:
                 if not ok[i]:
@@ -1638,13 +1672,16 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                 e = i + 1
                 while e < lx and ok[e] and not b.vwalls[j][e] and cell(e, j)[2:] == cell(i, j)[2:]:
                     e += 1
-                cells.append((*run((i, j), (e - 1, j)), wall))
+                cells.append((*run((i, j), (e - 1, j)), wall, hole))
                 i = e
     else:
         line = (lambda i: i) if r["side"] == "left" else (lambda i: i + 1)
         for i in range(lx):
             ok = [b.floors[j][i] and b.vwalls[j][line(i)] for j in range(ly)]
-            wall = b.h if line(i) in (0, lx) and not any(has(r["side"], k) for k in range(ly)) else hi
+            on_liner = line(i) in (0, lx) and any(has(r["side"], k) for k in range(ly))
+            wall = b.h if line(i) in (0, lx) and not on_liner else hi
+            # Walls along y have no finger holes; liners have notches (see U1-C-07).
+            hole = on_liner and b.fingerholes != "none"
             j = 0
             while j < ly:
                 if not ok[j]:
@@ -1653,7 +1690,7 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                 e = j + 1
                 while e < ly and ok[e] and not b.hwalls[e][i] and cell(i, e)[:2] == cell(i, j)[:2]:
                     e += 1
-                cells.append((*run((i, j), (i, e - 1)), wall))
+                cells.append((*run((i, j), (i, e - 1)), wall, hole))
                 j = e
     return cells
 

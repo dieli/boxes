@@ -99,7 +99,7 @@ def _arg_schema(a: argparse.Action, prefix: str | None) -> dict | None:
 # Card ramps: printed wedges in the compartments so cards slide up and out. They are not
 # cut, so they only show in the 3D view and the STL exports (see placements._card_ramps).
 _RAMP_GENERATORS = {"TypeTray", "TrayLayout"}
-_RAMP_DEFAULTS = {"ramp": "0", "ramp_side": "front", "ramp_height": "15", "ramp_angle": "45"}
+_RAMP_DEFAULTS = {"ramp": "0", "ramp_side": "front", "ramp_height": "auto", "ramp_angle": "45"}
 _RAMP_GROUP = {"title": "Card ramps (3D print)", "collapsed": True, "args": [
     {"name": "ramp", "label": "ramp", "kind": "bool", "default": False,
      "help": "add a 3D printed ramp to every compartment so cards slide up and out "
@@ -107,8 +107,9 @@ _RAMP_GROUP = {"title": "Card ramps (3D print)", "collapsed": True, "args": [
     {"name": "ramp_side", "label": "side", "kind": "select", "default": "front",
      "options": [[s, s] for s in ("front", "back", "left", "right")],
      "help": "wall the ramps lean against"},
-    {"name": "ramp_height", "label": "height", "kind": "text", "default": "15",
-     "help": "height at the wall in mm (at most the wall height)"},
+    {"name": "ramp_height", "label": "height", "kind": "text", "default": "auto",
+     "help": "height at the wall in mm (at most the wall height); auto: up to the bottom of the "
+             "finger hole in that wall, 15 mm for walls without finger holes"},
     {"name": "ramp_angle", "label": "angle", "kind": "text", "default": "45",
      "help": "slope in degrees from the floor (the ramp gets shorter if the compartment is too short)"},
 ]}
@@ -121,8 +122,11 @@ def _ramp_settings(args: dict) -> dict | None:
         return None
     if r["ramp_side"] not in ("front", "back", "left", "right"):
         raise ValueError(f"ramp_side: unknown side {r['ramp_side']!r}")
-    out = {"side": r["ramp_side"]}
+    out: dict = {"side": r["ramp_side"]}
     for k in ("height", "angle"):
+        if k == "height" and r["ramp_height"].strip().lower() == "auto":
+            out[k] = None  # placements._card_ramps: the finger hole's bottom
+            continue
         try:
             out[k] = float(r["ramp_" + k])
         except ValueError:

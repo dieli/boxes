@@ -173,7 +173,9 @@ verifying 3D placements for new generators.
 - TypeTray and TrayLayout have a "Card ramps (3D print)" group (web only, not in core): a wedge
   per compartment, leaning against the chosen wall (`ramp_side`) and rising from the floor at
   `ramp_angle` up to `ramp_height` (capped by the wall height and compartment length), so cards
-  slide up and out. TrayLayout compartments along that wall with no wall between them share one
+  slide up and out. `ramp_height=auto` (the default) ends the ramp at the bottom of the finger
+  hole in that wall (wall height minus the `FingerHoleEdge` depth), so a card on the ramp can be
+  gripped through the hole; walls without a finger hole get 15 mm. TrayLayout compartments along that wall with no wall between them share one
   ramp; compartments without a floor or without that wall get none. The ramps are extra parts
   (`Assembly.extra`, helper `printed`, negative `part` index) placed by `placements._card_ramps`:
   shown in 3D and the parts list, included in the STL exports (shortened by the print clearance
