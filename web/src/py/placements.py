@@ -37,11 +37,16 @@ def assemble(name: str, box, walls: list[dict]) -> Assembly | None:
 
 # --- Lids -----------------------------------------------------------------------------
 
-def place_lids(a: Assembly, f: BoxFrame, top_edge: str | None) -> None:
-    """Lids from _TopEdge.drawLid(x, y, top_edge) and box.lid(x, y, top_edge) on frame f."""
+def place_lids(a: Assembly, f: BoxFrame, top_edge: str | None,
+               inner: float | None = None) -> None:
+    """Lids from _TopEdge.drawLid(x, y, top_edge) and box.lid(x, y, top_edge) on frame f.
+    inner: height of the inner walls, if the box has any (see _lid)."""
     z = _top_edge_lid(a, f, top_edge) if top_edge is not None else f.h
     # A lid from box.lid sits on whatever closes the top.
-    _lid(a, f if z == f.h else f.sub(0, 0, 0, f.x, f.y, z))
+    if z == f.h:
+        _lid(a, f, inner)
+    else:
+        _lid(a, f.sub(0, 0, 0, f.x, f.y, z))
 
 
 def _top_edge_lid(a: Assembly, f: BoxFrame, top_edge: str) -> float:
@@ -74,8 +79,10 @@ def _top_edge_lid(a: Assembly, f: BoxFrame, top_edge: str) -> float:
     return f.h
 
 
-def _lid(a: Assembly, f: BoxFrame) -> None:
-    """boxes.lids.Lid: the "lid" settings group."""
+def _lid(a: Assembly, f: BoxFrame, inner: float | None = None) -> None:
+    """boxes.lids.Lid: the "lid" settings group. inner: height of inner walls; the lower layer
+    of a flat lid rests on them if they reach higher than h - t (the lid then sits above the
+    outer walls: set the inner height lower to have it sink in)."""
     parts = a.parts.drawn_by("Lid.__call__")
     if not parts:
         return
@@ -85,8 +92,9 @@ def _lid(a: Assembly, f: BoxFrame) -> None:
     bs = s.brim_spacing
     style = s.style
     if style == "flat":
-        f.plate(parts.label("lid bottom"), h - t, x0=bs, y0=bs)
-        f.plate(parts.label("lid top"), h)
+        z = max(h - t, inner or 0.0)
+        f.plate(parts.label("lid bottom"), z, x0=bs, y0=bs)
+        f.plate(parts.label("lid top"), z + t)
     elif style == "flatbrim":
         f.plate(parts.label("lid top"), h)
         # Brims hang from the lid into the box, held in finger holes; drawn upside down.
@@ -193,15 +201,20 @@ def type_tray(a: Assembly) -> None:
     p = a.parts
     _outer_walls(a, f, {"front": "front", "back": "back", "left side": "left",
                         "right side": "right", "bottom": "bottom"})
-    if b.closedtop and b.hi == b.h:
-        f.top(p.label("top"))
+    top = p.label("top") if b.closedtop and b.hi == b.h else None
+    if top is not None:
+        f.top(top)
     # Inner walls: "inner x k" between rows of sy, "inner y k" between sx. sy runs back to
     # front (as on the left side wall), so the inner y walls are seen from the left.
     for k, y0 in enumerate(positions(b.sy, t), 1):
         f.inner_x(p.label(f"inner x {k}"), y - y0 - t)
     for k, x0 in enumerate(positions(b.sx, t), 1):
         f.inner_y(p.label(f"inner y {k}"), x0, flip=True)
-    place_lids(a, f, b.top_edge)
+    if top is not None:
+        # The closed top is drawn by render(), not drawLid(): a lid sits on it.
+        _lid(a, f.sub(0, 0, 0, x, y, b.h + t))
+    else:
+        place_lids(a, f, b.top_edge, inner=b.hi if len(b.sx) > 1 or len(b.sy) > 1 else None)
     # Compartment (i, j): sx[i] from the left, sy[j] from the back.
     cx = [0.0] + [x0 + t for x0 in positions(b.sx, t)]
     cy = [y] + [y - y0 - t for y0 in positions(b.sy, t)]
@@ -209,51 +222,70 @@ def type_tray(a: Assembly) -> None:
     outer = {"front": lambda i, j: j == ly - 1, "back": lambda i, j: j == 0,
              "left": lambda i, j: i == 0, "right": lambda i, j: i == lx - 1}
     side = (getattr(b, "_web_ramp", None) or {}).get("side", "front")
+    hi = b.hi or b.h
     # Finger holes: inner walls along x always (if any), outer front/back only when chosen.
-    holes = side in ("front", "back") and b.fingerholes != "none"
+    # All notches are drawn with wallheight hi (FingerHoleEdgeSettings in render()).
+    depth = _notch_depth(b, hi) if side in ("front", "back") and b.fingerholes != "none" else 0.0
 
-    def hole(i: int, j: int) -> bool:
-        if not holes or not outer[side](i, j):
-            return holes
-        return not b.closedtop and b.fingerholes in (side, "front-and-back")
+    def hole(i: int, j: int) -> float:
+        if not depth or not outer[side](i, j):
+            return depth
+        return depth if not b.closedtop and b.fingerholes in (side, "front-and-back") else 0.0
 
-    _card_ramps(a, [(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j],
-                     b.h if outer[side](i, j) else (b.hi or b.h), hole(i, j))
-                    for j in range(ly) for i in range(lx)])
+    def wall(i: int, j: int) -> float:
+        if not outer[side](i, j):
+            return hi
+        return b.h + (b.back_height if side == "back" else 0.0)
+
+    _card_ramps(a, [(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j], wall(i, j), hole(i, j))
+                    for j in range(ly) for i in range(lx)], _ramp_limit(b, b.h))
 
 
 #: Ramp height for "auto" at walls without a finger hole (the former default).
 RAMP_HEIGHT_NO_HOLE = 15.0
 
 
-def _finger_hole_depth(box) -> float:
-    """Depth of the finger holes (FingerHoleEdge "A", from the top of the wall), 0 if none."""
+def _notch_depth(box, wallheight: float) -> float:
+    """Depth (from the top of the wall) of a finger hole notch (FingerHoleEdge "A") drawn with
+    this wallheight setting; 0 without one."""
     s = getattr(getattr(box, "edges", {}).get("A"), "settings", None)
-    if s is None or not getattr(s, "wallheight", 0):
+    if s is None or wallheight <= 0:
         return 0.0
-    return min(s.absolute_depth + s.wallheight * s.relative_depth, s.wallheight)
+    return min(s.absolute_depth + wallheight * s.relative_depth, wallheight)
 
 
-def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float, bool]]) -> None:
+def _ramp_limit(box, h: float) -> float:
+    """Highest a ramp may reach in a box with outer walls h high: lids that reach into the box
+    (the lower layer of flat and sliding lids, the brims of flatbrim) start lower."""
+    s = getattr(box, "lidSettings", None)
+    style = getattr(s, "style", "none")
+    if style in ("flat", "sliding"):
+        return h - box.thickness
+    if style == "flatbrim":
+        return h - s.brim_height
+    return h
+
+
+def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float, float]],
+                limit: float = math.inf) -> None:
     """Printed wedges so cards slide up and out, when the user turned them on (box._web_ramp:
-    side, height, angle; see boxes_bridge). cells: (x0, x1, y0, y1, wall height, finger hole)
-    of each compartment with a floor and a wall on the ramp side. A ramp fills the
-    compartment's width, leans against that wall and rises from the floor at the given angle.
-    Height None ("auto"): up to the bottom of the wall's finger hole, so a card lying on the
-    ramp can be gripped through the hole."""
+    side, height, angle; see boxes_bridge). cells: (x0, x1, y0, y1, wall height, finger hole
+    depth or 0) of each compartment with a floor and a wall on the ramp side. A ramp fills the
+    compartment's width, leans against that wall and rises from the floor at the given angle,
+    no higher than the wall and limit (see _ramp_limit). Height None ("auto"): up to the
+    bottom of the wall's finger hole, so a card lying on the ramp can be gripped through it."""
     r = getattr(a.box, "_web_ramp", None)
     if not r:
         return
     side = r["side"]
     tan = math.tan(math.radians(min(max(r["angle"], 5.0), 85.0)))
-    hole_depth = _finger_hole_depth(a.box)
-    for k, (x0, x1, y0, y1, wall, hole) in enumerate(cells, 1):
+    for k, (x0, x1, y0, y1, wall, hole_depth) in enumerate(cells, 1):
         along_y = side in ("front", "back")
         depth, width = (y1 - y0, x1 - x0) if along_y else (x1 - x0, y1 - y0)
         height = r["height"]
         if height is None:
-            height = wall - hole_depth if hole and hole_depth > 0 else RAMP_HEIGHT_NO_HOLE
-        h = min(height, wall)
+            height = wall - hole_depth if hole_depth > 0 else RAMP_HEIGHT_NO_HOLE
+        h = min(height, wall, limit)
         length = h / tan
         if length > depth:
             length, h = depth, depth * tan
@@ -1571,8 +1603,10 @@ def _tray_layout(a: Assembly, editable: bool) -> None:
     w = b.edges["F"].startWidth()
     a.place(_helper(a.parts, "free").drawn_by("TrayLayout.base_plate").first(),
             (-w, -w, -t), X, Y, Z, name="bottom")
-    place_lids(a, f, None)
-    _card_ramps(a, _tray_ramp_cells(b, xs, ys))
+    inner = (any(any(row) for row in b.hwalls[1:ly]) or any(any(row[1:lx]) for row in b.vwalls)
+             or any(any(v) for v in getattr(b, "liner", {}).values()))
+    place_lids(a, f, None, inner=(b.hi or b.h) if inner else None)
+    _card_ramps(a, _tray_ramp_cells(b, xs, ys), _ramp_limit(b, b.h))
     if not editable:
         return
     f.dims(h="h")
@@ -1655,15 +1689,19 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
         line = (lambda j: j + 1) if r["side"] == "front" else (lambda j: j)
         for j in range(ly):
             ok = [b.floors[j][i] and b.hwalls[line(j)][i] for i in range(lx)]
-            # A liner on the outer wall is only as high as the inner walls, and like them it
-            # has finger hole notches.
-            on_liner = line(j) in (0, ly) and any(has(r["side"], k) for k in range(lx))
-            if line(j) in (0, ly) and not on_liner:
-                # The sliding lid raises the back wall and lowers the front wall by t.
-                wall = b.h + (0.0 if not sliding else t if line(j) == 0 else -t)
-            else:
-                wall = hi
-            hole = b.fingerholes != "none" if on_liner else b.hasFingerHoles(line(j))
+            outer = line(j) in (0, ly)
+
+            def wall_hole(i: int) -> tuple[float, float]:
+                # A liner on the outer wall is only as high as the inner walls; it has finger
+                # hole notches where its outer wall has them (see TrayLayout.liners).
+                if outer and not has(r["side"], i):
+                    # The sliding lid raises the back wall and lowers the front wall by t.
+                    wall = b.h + (0.0 if not sliding else t if line(j) == 0 else -t)
+                    notch = min(wall, hi)
+                else:
+                    wall = notch = hi
+                return wall, (_notch_depth(b, notch) if b.hasFingerHoles(line(j)) else 0.0)
+
             i = 0
             while i < lx:
                 if not ok[i]:
@@ -1672,16 +1710,14 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                 e = i + 1
                 while e < lx and ok[e] and not b.vwalls[j][e] and cell(e, j)[2:] == cell(i, j)[2:]:
                     e += 1
-                cells.append((*run((i, j), (e - 1, j)), wall, hole))
+                cells.append((*run((i, j), (e - 1, j)), *wall_hole(i)))
                 i = e
     else:
         line = (lambda i: i) if r["side"] == "left" else (lambda i: i + 1)
         for i in range(lx):
             ok = [b.floors[j][i] and b.vwalls[j][line(i)] for j in range(ly)]
-            on_liner = line(i) in (0, lx) and any(has(r["side"], k) for k in range(ly))
-            wall = b.h if line(i) in (0, lx) and not on_liner else hi
-            # Walls along y have no finger holes; liners have notches (see U1-C-07).
-            hole = on_liner and b.fingerholes != "none"
+            outer = line(i) in (0, lx)
+            # Walls and liners along y have no finger holes.
             j = 0
             while j < ly:
                 if not ok[j]:
@@ -1690,7 +1726,8 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                 e = j + 1
                 while e < ly and ok[e] and not b.hwalls[e][i] and cell(i, e)[:2] == cell(i, j)[:2]:
                     e += 1
-                cells.append((*run((i, j), (i, e - 1)), wall, hole))
+                wall = b.h if outer and not has(r["side"], j) else hi
+                cells.append((*run((i, j), (i, e - 1)), wall, 0.0))
                 j = e
     return cells
 
