@@ -33,15 +33,19 @@ npm run preview  # serves web/dist/ on http://localhost:4173
   come from jsDelivr for the same Pyodide version and are checked against the sha256 in the
   served lock file. `qrcode` (pinned) comes from PyPI through `micropip`, then the local `boxes`
   wheel. `rectpack`/`svgpathtools` are only used by the CLI's `svgmerge` and are not loaded.
-- `src/boxesClient.ts` owns the worker. A request that takes longer than 30 s, or a worker that
-  crashes, rejects the open requests and starts a fresh Python (a few seconds); the status line
-  says so. A worker that fails while loading is not restarted, the error is shown instead.
+- `src/boxesClient.ts` owns the worker. A request that runs longer than 30 s (counted from when
+  the worker gets to it, not while it waits behind another one), or a worker that crashes, rejects
+  the open requests and starts a fresh Python (a few seconds); the status line says so. A worker
+  that fails while loading is not restarted: the error is shown, and after a failed restart the
+  status line says to reload the page.
 - Every SVG from Python goes through an allowlist sanitizer (`src/svg.ts`) before it is put into
   the page: only drawing elements are kept, event handler attributes, external links and
   `javascript:` values are dropped. Parameters come from shareable URLs, so the SVG is treated as
   untrusted.
 - Renders are numbered; a slow render that finishes after a newer one is never shown over it, and
-  the 3D view always belongs to the SVG on screen.
+  the 3D view always belongs to the SVG on screen. Download first renders an edit that is still
+  in its debounce, so the file matches the preview; while the preview shows an error, Download is
+  disabled. Switching generator drops an edit still in its debounce.
 - `src/boxes_bridge.py` turns each generator's argparse definition into a JSON schema
   (the same source `scripts/boxesserver` uses) and renders SVG.
 - `src/form.ts` builds the form from that schema. Changes are debounced (150 ms) and rendered
@@ -172,6 +176,9 @@ verifying 3D placements for new generators.
   changes its layout text (`splitLayout`/`mergeLayout`: parsed into a grid and written back in
   TrayLayoutFile's format; a split adds a full wall, a merge keeps walls/floors of either side).
   Generators with neither handles nor compartment lists keep Edit disabled.
+- Everything the 3D editor does can also be done in the form (the size fields, TrayLayout's
+  layout text), which works with the keyboard. Parts list entries take focus; Enter or Space
+  selects one.
 - TypeTray's Edit mode has "Convert to TrayLayout": same grid (sx, sy, h, hi) and the shared
   settings, so single wall pieces and floors can be removed. Browser Back returns to the TypeTray.
 - TrayLayout has TypeTray's `fingerholes` option (and the `FingerHoleEdge` settings): a notch per
@@ -261,12 +268,12 @@ own `tests/`, which upstream's workflow runs. Commands are for the repo root unl
 
 | Suite | What it covers | Command |
 |---|---|---|
-| Unit tests (Vitest, 60) | `layout.ts` (parse, toggle, split, merge, sizes), `zip.ts` (and part names), `bend.ts`, `stl.ts`, the SVG sanitizer, select fallback, the worker client (timeouts, crashes, restarts, latest-wins renders) | `web/`: `npm test` |
+| Unit tests (Vitest, 62) | `layout.ts` (parse, toggle, split, merge, sizes), `zip.ts` (and part names), `bend.ts`, `stl.ts`, the SVG sanitizer, select fallback, the worker client (timeouts per running request, crashes, restarts and failed restarts, latest-wins renders) | `web/`: `npm test` |
 | Typecheck | all of `web/src` | `web/`: `npm run typecheck` (also part of `npm run build`) |
-| Bridge tests (pytest, 19) | `boxes_bridge.py` and the placements: path joining, pieces, `ignore_widths`, composite edge pieces, ramp validation and warnings, argument filtering, print clearance, TrayLayout handles, extra parts | `uv run --no-project --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest python -m pytest web/tests/py -q` |
-| Core tests (pytest) | upstream's tests and reference SVGs, plus `tests/test_traylayout_options.py` (20) for this fork's TrayLayout options: notch depth per wall, outer walls per `fingerholes`, liners, size errors, the sliding lid (walls, layers, back wall gaps, handles, magnets, low walls), the lid class hook | same, plus `--with lxml --with markdown --with setuptools`, on `tests` (226 passed, 9 skipped) |
+| Bridge tests (pytest, 30) | `boxes_bridge.py` and the placements: path joining, pieces, `ignore_widths`, composite edge pieces, ramp validation and warnings, argument filtering (option names, non-finite numbers), print clearance, TrayLayout handles, extra parts | `uv run --no-project --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest python -m pytest web/tests/py -q` |
+| Core tests (pytest) | upstream's tests and reference SVGs, plus this fork's `tests/test_traylayout_options.py` (25: notch depth per wall, outer walls per `fingerholes`, liners, size errors, the sliding lid (walls, layers, back wall gaps, handles, magnets, low walls), the lid class hook), `tests/test_typetray.py` (2: `back_height`) and `tests/test_part_counts.py` (11: SpicesRack supports, WineRack walls) | same, plus `--with lxml --with markdown --with setuptools --with pyyaml`, on `tests` (244 passed, 9 skipped). The three fork test files also run in `web.yml` |
 | Assembly checker | `scripts/check_assembly.py`, see below: all placed generators, defaults plus extra cases | see below (about 10 min) |
-| Browser tests (17) | the built app in Edge or Chrome, see below | `web/`: `npm run test:e2e` |
+| Browser tests (21) | the built app in Edge or Chrome, see below | `web/`: `npm run test:e2e` |
 
 ### Checking placements
 
@@ -277,8 +284,10 @@ must be filled by another part's fingers, finger holes must be filled, and no tw
 into each other. Each pair of parts is checked once by index. A letter that is a finger joint
 elsewhere but a generator's own edge (e.g. KeyHolder's hook rail `H`) is not checked as one.
 Known upstream inconsistencies are listed in `EXPECTED`, keyed by generator, argument and value
-(or `None` for every case); finger holes of parts that stay 2D (hinges, latches, locks) are
-listed per generator, so an unplaced part does not silence the other checks. Bent flex walls are
+(or `None` for every case). Every part must be placed: an unplaced part
+(`unplaced (2D only): <label>`, or `#N (WxH)` without a label) and every placement warning fail
+the run unless the part is marked `a.scrap(part)` (an offcut) or listed in `EXPECTED` with the
+reason (hinges, latches, locks that stay 2D on purpose, with their finger holes). Bent flex walls are
 modelled exactly (arcs and straight pieces). Parts drawn by hand have no edge information, so
 for them only finger holes and overlaps are checked. Edges follow the real part shape (slanted
 trapezoid tops, triangle hypotenuses, polygonWall sides); each finger piece of a composite edge
@@ -300,10 +309,12 @@ preview server, then run them in `web/`:
 
 They cover the exports (SVG, per-part SVG zip, STL assembly/zip/single part), the card ramps and
 TrayLayout liners (from the URL and from the 3D editor), malformed and invalid URL values, a bad
-ramp value (a warning, 2D still renders) and the Phase 1 timing target: the median re-render of
+ramp value (a warning, 2D still renders), edits within the debounce (undo, switching generator,
+no download after a failed render), linked help texts and the Phase 1 timing target: the median re-render of
 ABox, ClosedBox, UniversalBox and TypeTray must stay under `PERF_LIMIT_MS` (300 ms by default,
 1000 on CI runners). Every test waits for the app's render counter instead of fixed sleeps and
-fails on any console error, a shown render error or a failed 3D placement.
+fails on any console error, a shown render error or a failed 3D placement (except the one that
+renders a bad value on purpose).
 
 ### By hand
 

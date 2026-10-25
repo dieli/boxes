@@ -170,7 +170,7 @@ uv run --no-project --with affine --with shapely --with qrcode --with typing_ext
 2. **Finger-joint overlap (`overlap <= 5%`)**: The fingers themselves must not intersect another part's solid body. Composite edges (compound and slotted edges) are checked finger piece by finger piece for fill.
 3. **Finger-hole occupancy (`fill >= 90%`)**: Every rectangular slot of width $\approx t$ inside a plate or wall must have a mating wall's fingers inside it.
 4. **Coarse 3D body intersection (`<= 1%`)**: No two parts may cut through each other. Each pair of parts is checked once, by index (parts with the same label are still compared).
-5. **Unplaced parts warning**: Lists any recorded parts that were left in 2D (`place is None`). (If a cut piece is an offcut rather than a real part, call `a.scrap(part)` so it is omitted from the 3D parts list.)
+5. **Every part placed, no warnings**: A recorded part left in 2D (`place is None`) fails the run as `unplaced (2D only): <label>` (`#N (WxH)` for a part without a label), and so does every placement warning. If a cut piece is an offcut rather than a real part, call `a.scrap(part)` so it is omitted from the 3D parts list; a part that stays 2D on purpose goes into `EXPECTED` (below).
 
 ### Adding Test Cases
 In `web/scripts/check_assembly.py`, add non-default parameter combinations to `CASES["MyGenerator"]`—especially **asymmetric `sx`/`sy` lists** (e.g. `{"sx": "30:50:70", "sy": "20:60"}`) and **`outside: "1"` / `"0"`**, which immediately catch walls that are rotated $180^\circ$ or flipped inside-out.
@@ -181,7 +181,8 @@ keyed by `(generator, (argument, value))` so it is only ignored in the cases tha
 `(generator, None)` for every case). Each pattern is a substring of the reported problem, or a
 tuple of substrings that must all be in it. Keep the patterns narrow and add a comment saying why
 the problem is upstream's. Finger holes for parts that stay 2D on purpose (hinges, latches,
-locks) are listed the same way: an unplaced part does not silence the other finger hole checks.
+locks) are listed the same way, both the part (`"unplaced (2D only): hinge"`) and its finger
+holes: an unplaced part does not silence the other finger hole checks.
 
 
 ---
