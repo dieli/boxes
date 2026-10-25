@@ -256,8 +256,6 @@ EXPECTED = {  # (generator, argument value or None for every case): problems to 
     ("HalfBox", None): ("bottom cuts into support",),
     # even n leaning inwards: the corner jogs of the G edges graze the neighbour wall (~1%)
     ("RegularBox", "35"): ("cuts into",),
-    # n=3: the plate corners reach into the rounded ends of the crossing walls' lowered tops
-    ("RegularStarBox", "3"): ("cuts into",),
     # sharpcorners: the walls are lengthened for a 22.5 degree bevel ground on by hand
     ("TriangleLamp", "1"): ("cuts into",),
     # The door is cut for pi r / 2 at the outer radius, longer than its closed path: with its

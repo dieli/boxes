@@ -2941,7 +2941,7 @@ def regular_star_box(a: Assembly) -> None:
     """Two equal halves (polygon plate + n walls standing on it); the upper one is turned
     over and by 180/n, so the walls cross into a star and their slots interlock. The lowered
     middle of each wall's top runs under the other half's plate. World: centre of the lower
-    plate at the origin, lower plate z [-t, 0], upper plate z [h - t, h]."""
+    plate at the origin, lower plate z [-t, 0], upper plate z [h, h + t]."""
     b = a.box
     t = a.t
     p = a.parts
@@ -2958,7 +2958,7 @@ def regular_star_box(a: Assembly) -> None:
         return (c * x - s * y, s * x + c * y, z)
 
     for half in range(2):
-        place = _Moved(a, turn, (0.0, 0.0, h - t)).place if half else a.place
+        place = _Moved(a, turn, (0.0, 0.0, h)).place if half else a.place
         if len(plates) > half:
             prm = plates[half].rec["params"]
             cx, cy = prm["start"][0] + prm["side"] / 2, prm["start"][1] + prm["h"]
@@ -2968,7 +2968,8 @@ def regular_star_box(a: Assembly) -> None:
             d = (math.cos(ang), math.sin(ang), 0.0)
             out = (math.sin(ang), -math.cos(ang), 0.0)
             place(wall, add(add((0.0, 0.0, 0.0), d, -side / 2), out, sh), d, Z, out)
-    a.dim("h", (0.0, -sh, -t), (0.0, -sh, h), neg(Y))
+    lo, hi = (-t, h + t) if b.outside else (0.0, h)  # what the h parameter measures
+    a.dim("h", (0.0, -sh, lo), (0.0, -sh, hi), neg(Y))
 
 
 def _polygon_walls(a: Assembly, pieces, borders, origin, h: float, bottom="F",
