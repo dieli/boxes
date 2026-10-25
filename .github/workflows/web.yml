@@ -1,0 +1,43 @@
+name: Web (Boxes.py Live)
+
+on:
+  pull_request:
+    paths: ["web/**", "boxes/**", "pyproject.toml", ".github/workflows/web.yml"]
+  push:
+    branches: ["master", "live-preview"]
+    paths: ["web/**", "boxes/**", "pyproject.toml", ".github/workflows/web.yml"]
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7 # builds the boxes wheel (scripts/build-wheel.mjs) and runs the checker
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Build (wheel, typecheck, bundle)
+        run: npm run build
+      - name: Assembly checker (all placement maps)
+        working-directory: .
+        run: >
+          uv run --no-project --python 3.13
+          --with affine --with shapely --with qrcode --with typing_extensions --with numpy
+          python web/scripts/check_assembly.py
+      - name: Browser tests
+        env:
+          BROWSER_CHANNEL: chrome # preinstalled on ubuntu-latest; Pyodide comes from jsDelivr
+        run: |
+          npm run preview -- --strictPort &
+          for i in $(seq 1 30); do curl -sf http://localhost:4173/ >/dev/null && break; sleep 1; done
+          npm run test:e2e
