@@ -17,7 +17,7 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7 # builds the boxes wheel (scripts/build-wheel.mjs) and runs the checker
+      - uses: astral-sh/setup-uv@v7 # Python tests and the assembly checker
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -26,8 +26,14 @@ jobs:
       - run: npm ci
       - name: Unit tests
         run: npm test
-      - name: Build (wheel, typecheck, bundle)
+      - name: Build (wheel, Pyodide core, typecheck, bundle)
         run: npm run build
+      - name: Python tests (bridge, placements)
+        working-directory: .
+        run: >
+          uv run --no-project --python 3.13
+          --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest
+          python -m pytest web/tests/py -q
       - name: Assembly checker (all placement maps)
         working-directory: .
         run: >
@@ -36,7 +42,8 @@ jobs:
           python web/scripts/check_assembly.py
       - name: Browser tests
         env:
-          BROWSER_CHANNEL: chrome # preinstalled on ubuntu-latest; Pyodide comes from jsDelivr
+          BROWSER_CHANNEL: chrome # preinstalled on ubuntu-latest; Pyodide packages come from jsDelivr
+          PERF_LIMIT_MS: "1000" # shared runners are slower than a desktop; locally the limit is 300
         run: |
           npm run preview -- --strictPort &
           for i in $(seq 1 30); do curl -sf http://localhost:4173/ >/dev/null && break; sleep 1; done

@@ -1,23 +1,39 @@
 // Shared helpers for the browser smoke tests. They drive the built app (npm run build, then
 // npm run preview) in Microsoft Edge or Chrome through playwright-core; no browser download needed.
+// BROWSER_CHANNEL picks one ("msedge", "chrome"); otherwise the first of them that starts.
 import { chromium } from "playwright-core";
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 export const BASE = process.env.BASE_URL ?? "http://localhost:4173/";
-const CHANNEL = process.env.BROWSER_CHANNEL ?? "msedge";
+const CHANNELS = process.env.BROWSER_CHANNEL ? [process.env.BROWSER_CHANNEL] : ["msedge", "chrome"];
 const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "boxes-e2e-"));
+process.on("exit", () => fs.rmSync(OUT, { recursive: true, force: true }));
+
+/** Page errors and console errors per page, since its last load(). */
+const pageErrors = new WeakMap();
 
 /** Opens a browser page and collects page errors and console errors in `errors`. */
 export async function openPage() {
-  const browser = await chromium.launch({
-    channel: CHANNEL,
-    // Software WebGL, so the 3D view also works on machines without a GPU (CI).
-    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
-  });
+  let browser, lastError;
+  for (const channel of CHANNELS) {
+    try {
+      browser = await chromium.launch({
+        channel,
+        // Software WebGL, so the 3D view also works on machines without a GPU (CI).
+        args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+      });
+      break;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (!browser) throw new Error(`No browser of ${CHANNELS.join(", ")} could be started: ${lastError?.message}`);
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, acceptDownloads: true });
   const errors = [];
+  pageErrors.set(page, errors);
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   return { browser, page, errors };
@@ -25,24 +41,39 @@ export async function openPage() {
 
 /** Loads a generator URL hash ("#ABox?x=100") from scratch and waits for its first render. */
 export async function load(page, hash) {
+  pageErrors.get(page).length = 0; // one failing test should not fail the next ones
   await page.goto(BASE + hash);
   await page.reload(); // a hash-only change does not reload the app
-  await waitRender(page, "");
+  await page.waitForFunction(() => Number(document.body.dataset.renders) > 0, null, { timeout: 120000 });
 }
 
-/** Waits until the render time shown differs from `prev` (a new render finished). */
-export async function waitRender(page, prev) {
-  await page.waitForFunction(
-    (p) => { const t = document.querySelector("#timing").textContent; return t && t !== p; },
-    prev, { timeout: 120000 });
-  await page.waitForTimeout(500); // let the 3D view and the parts list catch up
-}
-
-/** Runs `action` and waits for the render it triggers. */
+/** Runs `action` and waits for the render it triggers (shown with or without an error). */
 export async function rerender(page, action) {
-  const prev = await page.textContent("#timing");
+  const prev = await page.evaluate(() => Number(document.body.dataset.renders ?? 0));
   await action();
-  await waitRender(page, prev);
+  await page.waitForFunction((p) => Number(document.body.dataset.renders) > p, prev, { timeout: 120000 });
+}
+
+/**
+ * Fails on page or console errors, a shown render error or a failed 3D placement. Warnings
+ * next to the 3D view (e.g. "Ramps left out") are allowed unless `warnings` is false.
+ */
+export async function assertClean(page, { warnings = true } = {}) {
+  assert.deepEqual(pageErrors.get(page), [], "page or console errors");
+  const shown = await page.evaluate(() => {
+    const err = document.querySelector("#error");
+    const asm = document.querySelector("#assembly-error");
+    return {
+      error: err.hidden ? null : err.textContent,
+      assembly: asm.hidden ? null : asm.textContent,
+      warning: asm.classList.contains("warning"),
+    };
+  });
+  assert.equal(shown.error, null, "render error shown");
+  if (shown.assembly !== null) {
+    assert.ok(shown.warning, `3D placement failed: ${shown.assembly}`);
+    assert.ok(warnings, `unexpected warning: ${shown.assembly}`);
+  }
 }
 
 /** Downloads the current design in export format `fmt`; returns its name and bytes. */

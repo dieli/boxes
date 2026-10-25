@@ -1,10 +1,10 @@
 // TrayLayout: 0 mm rows/columns at the edge of the layout become liners.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { openPage, load, rerender, partNames } from "./helpers.mjs";
+import { assertClean, openPage, load, rerender, partNames } from "./helpers.mjs";
 
-let browser, page, errors;
-before(async () => ({ browser, page, errors } = await openPage()));
+let browser, page;
+before(async () => ({ browser, page } = await openPage()));
 after(async () => {
   await browser?.close();
 });
@@ -31,7 +31,7 @@ test("liners from a layout in the URL", async () => {
   assert.ok(names.some((n) => n.startsWith("liner x")), `back liner: ${names}`);
   assert.ok(names.some((n) => n.startsWith("liner y")), `left liner: ${names}`);
   assert.equal((await page.textContent("#assembly-error")).trim(), "");
-  assert.deepEqual(errors, []);
+  await assertClean(page);
 });
 
 test("editing sizes to 0 in the 3D editor", async () => {
@@ -63,5 +63,5 @@ test("editing sizes to 0 in the 3D editor", async () => {
   await x1.press("Enter");
   await page.waitForTimeout(1500);
   assert.deepEqual(await sizeLine(",>"), before, "middle column unchanged");
-  assert.deepEqual(errors, []);
+  await assertClean(page);
 });

@@ -1,10 +1,10 @@
 // STL and SVG exports for a plain box, a TrayLayout with sliding lid and a flex box.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { openPage, load, download, stlInfo, zipEntries } from "./helpers.mjs";
+import { assertClean, openPage, load, download, stlInfo, zipEntries } from "./helpers.mjs";
 
-let browser, page, errors;
-before(async () => ({ browser, page, errors } = await openPage()));
+let browser, page;
+before(async () => ({ browser, page } = await openPage()));
 after(async () => {
   await browser?.close();
 });
@@ -36,6 +36,6 @@ for (const hash of ["#ABox?burn=0.1", "#TrayLayout?Lid_style=sliding", "#FlexBox
     assert.ok(await page.$eval("#print-clearance-row", (e) => !e.hidden), "print clearance shown");
     const one = stlInfo((await download(page, "stl-part")).buf);
     assert.ok(one.ok && one.tris > 0, "single part STL is valid");
-    assert.deepEqual(errors, []);
+    await assertClean(page);
   });
 }
