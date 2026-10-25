@@ -118,6 +118,18 @@ def test_ramp_heights_follow_each_compartments_wall(lid):
     assert heights == [30.0, 45.0]
 
 
+def test_auto_ramp_stops_under_the_liners_notch():
+    # inside-only notches the liner (left compartment) like an inner wall, as "front" does;
+    # the outer front wall (right compartment) stays as without finger holes.
+    def auto(fingerholes):
+        return [h.expected for h in ramp_heights("TrayLayout", layout=FRONT_LINER_LEFT, h="50", hi="30",
+                                                 ramp_side="front", ramp_height="auto",
+                                                 fingerholes=fingerholes)]
+    left, right = auto("inside-only")
+    assert left == auto("front")[0] < auto("none")[0]
+    assert right == auto("none")[1]
+
+
 def test_ramp_stays_under_a_flat_lid():
     assert ramp_heights("TypeTray", h="40", sx="50", sy="100", ramp_side="front",
                         ramp_height="50", Lid_style="flat") == [37.0]

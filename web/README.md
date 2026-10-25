@@ -206,8 +206,8 @@ verifying 3D placements for new generators.
   floor in front of them. Core change in `boxes/generators/traylayout.py`
   (`TrayLayout.removeZeroSizes()` takes the 0 mm rows/columns out of the grid before drawing,
   `liners()` draws the plates; labels keep the layout text's numbering). 0 mm anywhere else is an
-  error. A liner's finger hole notch follows its outer wall: the front/back liner is notched when
-  that outer wall is (`fingerholes`), left/right liners never are. No dimension lines or handles
+  error. Front/back liners get finger hole notches like the inner walls (any `fingerholes`
+  but `none`), whether or not the outer wall behind them does; left/right liners never do. No dimension lines or handles
   are drawn for 0 mm rows and columns. Removing the outer wall piece behind a liner removes the
   liner there and keeps the outer wall: the 0 mm row folds its two walls into the outer one, so
   the layout's outer line stands for both (by design, see `TrayLayout.lines()`). In Edit mode the first and last compartment can be dragged or typed down to 0.

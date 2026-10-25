@@ -1750,15 +1750,17 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
             outer = line(j) in (0, ly)
 
             def wall_hole(i: int) -> tuple[float, float]:
-                # A liner on the outer wall is only as high as the inner walls; it has finger
-                # hole notches where its outer wall has them (see TrayLayout.liners).
                 if outer and not has(r["side"], i):
                     # The sliding lid raises the back wall and lowers the front wall by t.
                     wall = b.h + (0.0 if not sliding else t if line(j) == 0 else -t)
                     notch = min(wall, hi)
+                    notched = b.hasFingerHoles(line(j))
                 else:
+                    # An inner wall, or a liner on the outer wall: as high as the inner walls,
+                    # and a liner is notched like them (see TrayLayout.liners).
                     wall = notch = hi
-                return wall, (_notch_depth(b, notch) if b.hasFingerHoles(line(j)) else 0.0)
+                    notched = b.hasFingerHoles(line(j)) if not outer else b.fingerholes != "none"
+                return wall, (_notch_depth(b, notch) if notched else 0.0)
 
             i = 0
             while i < lx:
