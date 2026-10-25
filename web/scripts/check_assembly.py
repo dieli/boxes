@@ -238,9 +238,9 @@ CASES: dict[str, list[dict]] = {
                    {"layout": _LINER_FR}, {"layout": _LINER_FR, "Lid_style": "sliding", "hi": "40"},
                    *({"layout": l, "ramp": "1", "ramp_side": s} for l in (_LINER_BL, _LINER_FR)
                      for s in ("front", "back", "left", "right")),
-                   # Inner walls higher than the outer ones, with finger holes (U1-G-01).
+                   # Inner walls higher than the outer ones, with finger holes.
                    {"h": "40", "hi": "80", "fingerholes": "front-and-back"},
-                   # Flat lid on inner walls as high as the outer ones (N-05).
+                   # Flat lid on inner walls as high as the outer ones.
                    {"Lid_style": "flat", "h": "30"}, {"Lid_style": "flat", "h": "30", "hi": "20"},
                    # Sliding lid with finger holes, a handle, magnets, an open back, low walls.
                    {"Lid_style": "sliding", "fingerholes": "front-and-back"},

@@ -244,21 +244,17 @@ I did not write most of the code by hand.
 
 To make up for that:
 
-- The code is reviewed by two independent AI reviewers (Claude and Gemini) with the same brief,
-  covering correctness, safety, performance, readability, coding style, maintainability, error
-  handling, tests, accessibility and licensing ([docs/review/REVIEW_BRIEF.md](docs/review/REVIEW_BRIEF.md)).
-  Every finding is checked against the code before it is fixed, and the findings and decisions
-  are kept in `docs/review/`. *Status:* one round done (units U1–U5, both reviewers); every
-  finding is fixed or deferred with a reason in [docs/review/TRIAGE.md](docs/review/TRIAGE.md).
-  A second round checks the fixes ([docs/review/ROUND2_PROMPT.md](docs/review/ROUND2_PROMPT.md)).
+- The code was reviewed in two rounds by two independent AI reviewers (Claude and Gemini) with
+  the same brief, covering correctness, safety, performance, readability, coding style,
+  maintainability, error handling, tests, accessibility and licensing. Every finding was checked
+  against the code before it was fixed; the second round checked the fixes. What is left is
+  deferred on purpose (splitting `main.ts`, less generator math duplicated in `placements.py`).
 - Changes are covered by automated checks (below) and were tested by hand.
 - Core changes are kept small so they can be offered upstream, where they would get a human
   review.
 
 Treat it as experimental. Check the parts in the 2D view and the 3D assembly before cutting
 expensive material, and report problems in this fork, not to upstream Boxes.py.
-
-The steps still open before publishing are in [docs/PUBLISHING_PLAN.md](docs/PUBLISHING_PLAN.md).
 
 ## Testing
 
