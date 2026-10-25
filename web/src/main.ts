@@ -57,6 +57,11 @@ let changePending = false;
 /** Render requests in order; the newest one shown so far (an older result arriving later is dropped). */
 let renderSeq = 0;
 let shownSeq = 0;
+/** The render started last, and whether the last one shown failed (its sheet is stale). */
+let lastRender: Promise<void> = Promise.resolve();
+let renderFailed = false;
+/** loadGenerator calls in order: an older one still loading its schema gives way. */
+let loadSeq = 0;
 /** Selected part, as the index of its `<g id="p-N">` in the SVG. */
 let selected: number | null = null;
 let view3d: AssemblyView | null = null;
@@ -83,7 +88,7 @@ function flushChange() {
   changePending = false;
   recordUndo();
   writeHash();
-  void render();
+  void startRender();
 }
 
 // --- Undo / redo of parameter changes (per generator) ---
@@ -145,7 +150,7 @@ function stepUndo(delta: number) {
   }
   updateUndoButtons();
   writeHash();
-  void render();
+  void startRender();
 }
 
 function updateUndoButtons() {
@@ -212,6 +217,10 @@ function populatePicker(filter = "") {
 // --- Generator loading & rendering ---
 
 async function loadGenerator(name: string, initial: ArgValues = {}) {
+  // An edit still in its debounce belongs to the form that is being replaced.
+  clearTimeout(debounce);
+  changePending = false;
+  const seq = ++loadSeq;
   if (!generators.has(name)) name = DEFAULT_GENERATOR;
   if (name !== current) {
     selected = null;
@@ -224,14 +233,28 @@ async function loadGenerator(name: string, initial: ArgValues = {}) {
   }
   picker.value = name;
   const schema = await client.schema(name);
-  if (current !== name) return;
+  if (seq !== loadSeq) return;
   docEl.textContent = schema.doc;
   form.build(schema, initial);
   lastDefaultLayout = null;
   syncLayout();
   resetUndo();
   writeHash();
-  await render();
+  await startRender();
+}
+
+function startRender(): Promise<void> {
+  lastRender = render();
+  return lastRender;
+}
+
+/** Waits until the newest render (also one started meanwhile) is done. */
+async function renderSettled() {
+  let r: Promise<void>;
+  do {
+    r = lastRender;
+    await r;
+  } while (r !== lastRender);
 }
 
 async function render() {
@@ -261,12 +284,16 @@ async function render() {
     const total = performance.now() - t0;
     timingEl.textContent = `${total.toFixed(0)} ms (Python ${result.ms.toFixed(0)} ms)`;
     showError(null);
+    renderFailed = false;
     exportFormatSelect.disabled = false;
     downloadBtn.disabled = false;
   } catch (e) {
     if (seq < shownSeq) return;
     shownSeq = seq;
     showError(e);
+    // The sheet shown is from older values: no download until a render works again.
+    renderFailed = true;
+    downloadBtn.disabled = true;
   }
   // Renders shown so far, with or without an error: the browser tests wait for this.
   document.body.dataset.renders = String(Number(document.body.dataset.renders ?? 0) + 1);
@@ -750,42 +777,31 @@ showDimsInput.addEventListener("change", () => view3d?.setDimensionsVisible(show
 $("show-all").addEventListener("click", () => setAllHidden(false));
 $("hide-all").addEventListener("click", () => setAllHidden(true));
 downloadBtn.addEventListener("click", async () => {
-  const format = exportFormatSelect.value;
-  if (format === "svg-parts") {
-    downloadBtn.disabled = true;
-    try {
-      await exportSvgParts();
-    } catch (e) {
-      showError(e);
-    } finally {
-      downloadBtn.disabled = false;
-    }
-    return;
-  }
-  // Rendered again (not the preview's SVG): the bridge joins each contour into one path.
-  if (format === "svg" || format === "lbrn2" || format === "ps" || format === "svg_Ponoko") {
-    downloadBtn.disabled = true;
-    try {
-      const content = await client.exportFormat(current, form.values(), format);
-      const ext = format === "svg_Ponoko" ? "-ponoko.svg" : `.${format}`;
-      const mime = format === "ps" ? "application/postscript" : format === "lbrn2" ? "application/xml" : "image/svg+xml";
-      downloadBlob(new Blob([content], { type: mime }), `${current}${ext}`);
-    } catch (e) {
-      showError(e);
-    } finally {
-      downloadBtn.disabled = false;
-    }
-    return;
-  }
   downloadBtn.disabled = true;
   try {
-    await exportStl(format);
+    // The file is made from what the preview shows: an edit still in its debounce is rendered first.
+    flushChange();
+    await renderSettled();
+    if (!renderFailed) await exportCurrent(exportFormatSelect.value);
   } catch (e) {
     showError(e);
   } finally {
-    downloadBtn.disabled = false;
+    downloadBtn.disabled = renderFailed;
   }
 });
+
+async function exportCurrent(format: string) {
+  if (format === "svg-parts") return exportSvgParts();
+  // Rendered again (not the preview's SVG): the bridge joins each contour into one path.
+  if (format === "svg" || format === "lbrn2" || format === "ps" || format === "svg_Ponoko") {
+    const content = await client.exportFormat(current, form.values(), format);
+    const ext = format === "svg_Ponoko" ? "-ponoko.svg" : `.${format}`;
+    const mime = format === "ps" ? "application/postscript" : format === "lbrn2" ? "application/xml" : "image/svg+xml";
+    downloadBlob(new Blob([content], { type: mime }), `${current}${ext}`);
+    return;
+  }
+  return exportStl(format);
+}
 
 /** A ZIP with one SVG per part, named after the parts, for cutter software that loses the groups. */
 async function exportSvgParts() {
