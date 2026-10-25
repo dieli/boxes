@@ -137,10 +137,49 @@ def _lid(a: Assembly, f: BoxFrame, inner: float | None = None) -> None:
         lf.back(parts.label("lid back"))
         lf.left(parts.label("lid left"))
         lf.right(parts.label("lid right"))
+        if style == "ontop":
+            # Locating brims, one in the middle of each side, inside the lid's walls: from
+            # the lid top down to 2t into the box.
+            brims = parts.labelled("lid\nbrim")
+            for (x0, y0), u, n in (((x / 2, t), X, neg(Y)), ((x / 2, y - t), neg(X), Y),
+                                   ((0.0, y / 2), Y, X), ((x, y / 2), neg(Y), neg(X))):
+                q = brims.first()
+                if q is not None:
+                    a.place(q, add(f.at(x0, y0, h + s.height - q.y), u, -q.x / 2), u, Z, n,
+                            name="lid brim")
+        _handle(a, f, parts, (x / 2, y / 2), h + (s.height if style == "ontop" else 0.0))
     elif style == "sliding":
         f.plate(parts.label("lid bottom"), h - t, x0=bs, y0=-t)
         f.plate(parts.label("lid top"), h)
+        # Both layers span -t .. y - bs (see TrayLid).
+        _handle(a, f, parts, (x / 2, (y - bs - t) / 2), h - t)
+    if style == "flat":
+        _handle(a, f, parts, (x / 2, y / 2), z)
     # "chest" sides are not drawn with rectangularWall, so they are not recorded yet.
+    # flatbrim and flatfang lids draw the handle but no hole for it: it stays 2D only.
+
+
+def _handle(a: Assembly, f: BoxFrame, parts, centre: tuple[float, float], z: float) -> None:
+    """Lid handle (Lid.handleParts) through the lid's hole at centre, its foot below the lowest
+    lid layer, which starts at z. A long handle stands along x; the two knob pieces cross."""
+    t = a.t
+    cx, cy = centre
+
+    def put(q, along_x: bool) -> None:
+        # Centred on its own outline: both knob pieces are drawn in one move (one bounding box).
+        xs = [p[0] for p in q.rec["outline"]["outer"]]
+        ys = [p[1] for p in q.rec["outline"]["outer"]]
+        mid, bottom = (min(xs) + max(xs)) / 2, min(ys)
+        if along_x:
+            a.place(q, f.at(cx - mid, cy + t / 2, z - t - bottom), X, Z, neg(Y), name="lid handle")
+        else:
+            a.place(q, f.at(cx - t / 2, cy - mid, z - t - bottom), Y, Z, X, name="lid handle")
+
+    long = parts.drawn_by("Lid.longHandle").first()
+    if long is not None:
+        put(long, True)
+    for q, along_x in zip(list(parts.drawn_by("Lid.knobHandle")), (True, False)):
+        put(q, along_x)
 
 
 # --- Simple boxes ---------------------------------------------------------------------
