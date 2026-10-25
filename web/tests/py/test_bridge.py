@@ -68,6 +68,52 @@ def test_good_ramp_values_give_ramps_and_no_warning():
     assert any(p["helper"] == "printed" for p in r["parts"])
 
 
+def ramp_heights(name: str, **args) -> list[float]:
+    """Heights of the card ramps in drawing order (compartments back to front, left to right)."""
+    r = render(name, ramp="1", outside="0", **args)
+    return [pytest.approx(max(q[1] for q in p["outline"]["outer"]), abs=1e-6)
+            for p in r["parts"] if p["helper"] == "printed"]
+
+
+# A front liner in the left column only (0 mm last row, gap in the line above it).
+FRONT_LINER_LEFT = """ ,> 50mm
+ | ,> 50mm
++-+-+
+| | |  50mm
++-+ +
+| | |  0mm
++-+-+
+"""
+
+
+@pytest.mark.parametrize("lid", ["none", "flat"])
+def test_ramp_heights_follow_each_compartments_wall(lid):
+    # Left: against the liner (as high as the inner walls); right: against the outer wall.
+    # The flat lid's lower layer starts at h - t = 47, above both.
+    heights = ramp_heights("TrayLayout", layout=FRONT_LINER_LEFT, h="50", hi="30",
+                           ramp_side="front", ramp_height="45", Lid_style=lid)
+    assert heights == [30.0, 45.0]
+
+
+def test_ramp_stays_under_a_flat_lid():
+    assert ramp_heights("TypeTray", h="40", sx="50", sy="100", ramp_side="front",
+                        ramp_height="50", Lid_style="flat") == [37.0]
+
+
+def test_ramp_on_the_raised_back_wall():
+    # back_height raises the back wall to 60 (top_edge "e"): no lid, so up to the wall.
+    assert ramp_heights("TypeTray", h="30", back_height="30", sx="50", sy="100",
+                        ramp_side="back", ramp_height="50") == [50.0]
+    # The core ignores back_height with another top edge: the wall stays 40 high.
+    assert ramp_heights("TypeTray", h="40", back_height="20", top_edge="h", sx="50", sy="100",
+                        ramp_side="back", ramp_height="50") == [40.0]
+
+
+def test_ramp_on_inner_walls_higher_than_the_outer_ones():
+    assert ramp_heights("TrayLayout", h="30", hi="60", sx="50", sy="50*2", ramp_side="front",
+                        ramp_height="50") == [50.0, 30.0]
+
+
 # --- STL for printing ------------------------------------------------------------------
 
 def test_printed_parts_keep_their_shape_and_get_play_on_both_sides():

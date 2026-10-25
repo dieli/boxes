@@ -271,10 +271,13 @@ def type_tray(a: Assembly) -> None:
             return depth
         return depth if not b.closedtop and b.fingerholes in (side, "front-and-back") else 0.0
 
+    # The core raises the back wall by back_height only with top_edge "e".
+    bh = b.back_height if b.top_edge == "e" else 0.0
+
     def wall(i: int, j: int) -> float:
         if not outer[side](i, j):
             return hi
-        return b.h + (b.back_height if side == "back" else 0.0)
+        return b.h + (bh if side == "back" else 0.0)
 
     _card_ramps(a, [(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j], wall(i, j), hole(i, j))
                     for j in range(ly) for i in range(lx)], _ramp_limit(b, b.h))
@@ -294,15 +297,17 @@ def _notch_depth(box, wallheight: float) -> float:
 
 
 def _ramp_limit(box, h: float) -> float:
-    """Highest a ramp may reach in a box with outer walls h high: lids that reach into the box
-    (the lower layer of flat and sliding lids, the brims of flatbrim) start lower."""
+    """Highest a ramp may reach in a box with outer walls h high: below lids that reach into
+    the box (the lower layer of flat and sliding lids, the brims of flatbrim). Other lids sit
+    on top: the ramp only has to stay below its wall (a raised back wall, inner walls higher
+    than h)."""
     s = getattr(box, "lidSettings", None)
     style = getattr(s, "style", "none")
     if style in ("flat", "sliding"):
         return h - box.thickness
     if style == "flatbrim":
         return h - s.brim_height
-    return h
+    return math.inf
 
 
 def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float, float]],
