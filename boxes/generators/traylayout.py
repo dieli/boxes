@@ -819,8 +819,10 @@ a liner glued to the outer wall (no finger joints).
         if core.get("style") not in base.absolute_params["style"]:
             core["style"] = "none"
         self.edgesettings["Lid"] = core
-        super()._buildObjects()
-        self.edgesettings["Lid"] = lid
+        try:
+            super()._buildObjects()
+        finally:
+            self.edgesettings["Lid"] = lid
         self.lidSettings = TrayLidSettings(self.thickness, True, **lid)
         self.lid = TrayLid(self, self.lidSettings)
 
