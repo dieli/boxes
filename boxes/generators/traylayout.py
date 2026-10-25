@@ -533,7 +533,7 @@ a liner glued to the outer wall (no finger joints).
                       color=Color.ANNOTATIONS, align="center", fontsize=2*self.thickness)
             posx += sx[pos] / 2 + self.thickness
 
-    def walls(self, move=None):
+    def walls(self, move: str | None = None) -> None:
         lx = len(self.x)
         ly = len(self.y)
         t = self.thickness
@@ -610,7 +610,7 @@ a liner glued to the outer wall (no finger joints).
                 edges.pop()
                 le = side_edge(h, hx(start), is_outer, "f", True)
                 re = side_edge(h, hx(end), is_outer, "f", False)
-                top = "e"
+                top: str | boxes.edges.BaseEdge = "e"
                 if self.hasFingerHoles(y):
                     # one finger hole per compartment, none over the crossings
                     top = boxes.edges.CompoundEdge(
