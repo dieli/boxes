@@ -132,8 +132,14 @@ function updateUndoButtons() {
 function readHash(): { name: string; args: ArgValues } {
   // Only the name is decoded here: URLSearchParams decodes the query itself ("+" is a space,
   // "%2B" a plus, as in TrayLayout's layout).
-  const [name, query = ""] = location.hash.slice(1).split("?", 2);
-  return { name: decodeURIComponent(name), args: Object.fromEntries(new URLSearchParams(query)) };
+  const [raw, query = ""] = location.hash.slice(1).split("?", 2);
+  let name = "";
+  try {
+    name = decodeURIComponent(raw);
+  } catch {
+    // A broken escape ("#%E0"): fall back to the default generator.
+  }
+  return { name, args: Object.fromEntries(new URLSearchParams(query)) };
 }
 
 function writeHash() {
@@ -666,7 +672,7 @@ exportPartSelect.addEventListener("change", () => {
 });
 window.addEventListener("hashchange", () => {
   const { name, args } = readHash();
-  void loadGenerator(name, args);
+  loadGenerator(name, args).catch(showError);
 });
 $("reset").addEventListener("click", () => form.reset());
 $("zoom-in").addEventListener("click", () => ((zoom *= 1.25), applyZoom()));
@@ -809,4 +815,4 @@ client.ready.then(
     statusEl.textContent = "Failed to load";
     showError(e);
   },
-);
+).catch(showError);
