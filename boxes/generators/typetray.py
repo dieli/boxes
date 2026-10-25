@@ -337,11 +337,11 @@ class TypeTray(_TopEdge):
 
         if bh:
             self.trapezoidSideWall(
-                y, h, h+bh, [b, "h", "e", "h"],
+                y, h+bh, h, [b, "h", "e", "h"],
                 radius=self.radius, callback=[self.yHoles, ],
                 move="up", label="left side")
             self.trapezoidSideWall(
-                y, h+bh, h, [b, "h", "e", "h"], radius=self.radius,
+                y, h, h+bh, [b, "h", "e", "h"], radius=self.radius,
                 callback=[self.mirrorX(self.yHoles, y), ],
                 move="up", label="right side")
         else:
