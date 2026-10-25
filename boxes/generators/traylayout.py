@@ -516,7 +516,8 @@ a liner glued to the outer wall (no finger joints).
         if self.fingerholes == "none":
             return False
         if y == 0:
-            return self.fingerholes in ("back", "front-and-back") and                 self.lidSettings.style != "sliding"
+            return (self.fingerholes in ("back", "front-and-back")
+                    and self.lidSettings.style != "sliding")
         if y == len(self.y):
             return self.fingerholes in ("front", "front-and-back")
         return True
