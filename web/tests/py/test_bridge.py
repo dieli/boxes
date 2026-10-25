@@ -50,6 +50,29 @@ def test_web_settings_do_not_leak_into_other_code():
     assert "--input" not in bb.get_schema("TrayLayout")
 
 
+def test_every_schema_field_passes_the_filter():
+    # One name for the form and the filter: the form's defaults are accepted as they are
+    # (not rendered, which would take minutes for all generators).
+    for name in bb._generators:
+        box = bb._new_box(name)
+        options = {bb._option_name(a): a for a in box.argparser._actions}
+        fields = [f["name"] for g in json.loads(bb.get_schema(name))["groups"] for f in g["args"]]
+        assert all(f in options for f in fields if not f.startswith("ramp")), name
+
+
+def test_option_names_keep_inner_dashes_and_skip_short_flags():
+    parser = argparse.ArgumentParser()
+    names = [bb._option_name(parser.add_argument(*o)) for o in
+             (["--foo-bar"], ["-x", "--xx"], ["-y"], ["pos"])]
+    assert names == ["foo-bar", "xx", None, None]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-Infinity"])
+def test_non_finite_numbers_name_the_parameter(value):
+    with pytest.raises(ValueError, match=f"^x: {value} is not a finite number"):
+        render("ABox", x=value)
+
+
 @pytest.mark.parametrize("args", [
     {"ramp_angle": "nan"}, {"ramp_height": "inf"}, {"ramp_height": "-5"},
     {"ramp_angle": "90"}, {"ramp_angle": "abc"},

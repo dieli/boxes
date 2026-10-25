@@ -78,10 +78,24 @@ def list_generators() -> str:
     })
 
 
+def _option_name(a: argparse.Action) -> str | None:
+    """The name a parameter has in the form and in render arguments: the first long option
+    without its leading "--". Positionals and short-only flags have none."""
+    return next((o[2:] for o in a.option_strings if o.startswith("--")), None)
+
+
+def _finite(v) -> bool:
+    """False for values float() reads as NaN or infinity; anything else is left to argparse."""
+    try:
+        return math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return True
+
+
 def _arg_schema(a: argparse.Action, prefix: str | None) -> dict | None:
-    if isinstance(a, argparse._HelpAction) or a.dest in _HIDDEN:
+    name = _option_name(a)
+    if isinstance(a, argparse._HelpAction) or a.dest in _HIDDEN or name is None:
         return None
-    name = a.option_strings[0].replace("-", "")
     label = name[len(prefix) + 1:] if prefix and name.startswith(prefix + "_") else name
     default = a.default
     t = a.type
@@ -181,10 +195,14 @@ def _render_box(name: str, args_json: str, fmt: str = "svg", join: bool = False,
         except ValueError as e:
             box._web_ramp_error = str(e)
     # Only the generator's own options, spelled out (no argparse abbreviations, no --input).
-    options = {o[2:] for a in box.argparser._actions for o in a.option_strings if o.startswith("--")}
-    unknown = sorted(k for k in args if k not in options or k in _HIDDEN)
+    options = {_option_name(a): a for a in box.argparser._actions}
+    unknown = sorted(k for k in args if k not in options or options[k].dest in _HIDDEN)
     if unknown:
         raise ValueError(f"Unknown parameter{'s' if len(unknown) > 1 else ''}: {', '.join(unknown)}")
+    for k, v in args.items():
+        # "nan" and "inf" parse as floats but break the drawing far from here (or the JSON).
+        if options[k].type is float and not _finite(v):
+            raise ValueError(f"{k}: {v} is not a finite number")
     box.parseArgs([f"--{k}={v}" for k, v in args.items()] + [f"--format={fmt}"])
     if name == "TrayLayout" and not box.layout.strip():
         # Like the server UI's JavaScript: without a layout, start from the sx x sy grid
