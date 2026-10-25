@@ -11,6 +11,8 @@ const PYODIDE_VERSION = "314.0.7";
 const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 // Prebuilt in Pyodide; qrcode comes from PyPI. svgmerge-only deps (rectpack, svgpathtools) are not needed.
 const PYODIDE_PACKAGES = ["micropip", "affine", "shapely", "numpy", "typing-extensions"];
+// Pinned, so a new PyPI release can't change or break the app without a commit.
+const QRCODE = "qrcode==8.2";
 
 interface Bridge {
   list_generators(): string;
@@ -47,7 +49,7 @@ async function init(wheelBase: string) {
   py.FS.writeFile(`/tmp/${manifest.wheel}`, new Uint8Array(await wheel.arrayBuffer()));
   await py.runPythonAsync(`
 import micropip
-await micropip.install("qrcode")
+await micropip.install("${QRCODE}")
 await micropip.install("emfs:/tmp/${manifest.wheel}", deps=False)
 `);
 
