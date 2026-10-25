@@ -128,9 +128,13 @@ def _ramp_settings(args: dict) -> dict | None:
             out[k] = None  # placements._card_ramps: the finger hole's bottom
             continue
         try:
-            out[k] = float(r["ramp_" + k])
+            v = float(r["ramp_" + k])
         except ValueError:
             raise ValueError(f"ramp_{k}: {r['ramp_' + k]!r} is not a number") from None
+        if not math.isfinite(v) or v <= 0 or (k == "angle" and v >= 90):
+            limits = "between 0 and 90" if k == "angle" else "more than 0"
+            raise ValueError(f"ramp_{k}: {r['ramp_' + k]!r} must be a number {limits}")
+        out[k] = v
     return out
 
 
@@ -156,7 +160,18 @@ def get_schema(name: str) -> str:
 def _render_box(name: str, args_json: str, fmt: str = "svg", join: bool = False, split: bool = False):
     box = _generators[name]()
     args = json.loads(args_json)
-    box._web_ramp = _ramp_settings(args) if name in _RAMP_GENERATORS else None
+    # Ramps are 3D only: a bad value must not break the 2D drawing (see render_with_parts).
+    box._web_ramp = box._web_ramp_error = None
+    if name in _RAMP_GENERATORS:
+        try:
+            box._web_ramp = _ramp_settings(args)
+        except ValueError as e:
+            box._web_ramp_error = str(e)
+    # Only the generator's own options, spelled out (no argparse abbreviations, no --input).
+    options = {o[2:] for a in box.argparser._actions for o in a.option_strings if o.startswith("--")}
+    unknown = sorted(k for k in args if k not in options or k in _HIDDEN)
+    if unknown:
+        raise ValueError(f"Unknown parameter{'s' if len(unknown) > 1 else ''}: {', '.join(unknown)}")
     box.parseArgs([f"--{k}={v}" for k, v in args.items()] + [f"--format={fmt}"])
     if name == "TrayLayout" and not box.layout.strip():
         # Like the server UI's JavaScript: without a layout, start from the sx x sy grid
@@ -213,8 +228,17 @@ def render_parts(name: str, args_json: str, fmt: str = "svg") -> str:
 # pieces where needed. Only the order and direction of the cuts change, not their geometry.
 # Not used for the preview: the part recorder counts the paths as drawn.
 
-def _pt_key(x: float, y: float) -> tuple[float, float]:
-    return (round(x, 2), round(y, 2))
+#: Endpoints closer than this are the same point (mm); also used to close loops.
+_JOIN_TOL = 1e-3
+
+
+def _pt_key(x: float, y: float) -> tuple[int, int]:
+    """Grid cell (of size 10 * _JOIN_TOL) of a point; neighbours are looked up too."""
+    return (math.floor(x / (10 * _JOIN_TOL)), math.floor(y / (10 * _JOIN_TOL)))
+
+
+def _near(a, b) -> bool:
+    return abs(a[0] - b[0]) <= _JOIN_TOL and abs(a[1] - b[1]) <= _JOIN_TOL
 
 
 def _reverse_subpath(sub: list) -> list:
@@ -229,7 +253,7 @@ def _reverse_subpath(sub: list) -> list:
 
 
 def _join_paths(part) -> None:
-    from boxes.drawing import Path, points_equal
+    from boxes.drawing import Path
     items: list[tuple[int, object]] = []  # (original order, Path kept as is | (group, subpath))
     groups: list[dict] = []
     for path in part.pathes:
@@ -254,7 +278,7 @@ def _join_paths(part) -> None:
     subs = [(n, it) for n, it in items if isinstance(it, tuple) and len(it[1]) > 1]
     if len(subs) < 2:
         return
-    closed = lambda sp: points_equal(*sp[0][1:3], *sp[-1][1:3])
+    closed = lambda sp: len(sp) > 2 and _near(sp[0][1:3], sp[-1][1:3])
     at: dict[tuple, set[int]] = {}
     for k, (_, (g, sp)) in enumerate(subs):
         if not closed(sp):
@@ -264,12 +288,16 @@ def _join_paths(part) -> None:
 
     def take(g, xy, want_start: bool):
         """An unused open subpath touching xy, oriented to start (or end) there."""
-        for k in sorted(at.get((g, *_pt_key(*xy)), ())):
+        cx, cy = _pt_key(*xy)
+        near = set().union(*(at.get((g, cx + i, cy + j), ()) for i in (-1, 0, 1) for j in (-1, 0, 1)))
+        for k in sorted(near):
+            sp = subs[k][1][1]
             if used[k]:
                 continue
-            sp = subs[k][1][1]
+            starts_here = _near(sp[0][1:3], xy)
+            if not starts_here and not _near(sp[-1][1:3], xy):
+                continue
             used[k] = True
-            starts_here = _pt_key(*sp[0][1:3]) == _pt_key(*xy)
             return sp if starts_here == want_start else _reverse_subpath(sp)
         return None
 
@@ -431,7 +459,11 @@ def _rect_like(box, a, x, y, n=4, **extra):
 
 
 def _describe_rectangular_wall(box, a):
-    return _rect_like(box, a, a["x"], a["y"])
+    d = _rect_like(box, a, a["x"], a["y"])
+    if 7 in (a.get("ignore_widths") or ()):
+        # No move to the inner rectangle first: edge 0 starts edge 3's width further left.
+        d["offset"] = (d["edges"][3].endWidth(), d["offset"][1])
+    return d
 
 
 def _describe_trapezoid(box, a):
@@ -732,6 +764,8 @@ def _pieces(part, to_local: Affine, close_tol: float = _DEFAULT_CLOSE_TOL) -> li
     if lines and all(l[0] == l[-1] and len(l) > 3 for l in lines):
         rings = [l[:-1] for l in lines]
     else:
+        # As in _outline_shapely: paths that miss their start by a hair are closed.
+        lines = [l + [l[0]] if 0 < math.dist(l[0], l[-1]) < _CLOSE_GAP else l for l in lines]
         faces = list(polygonize(unary_union([LineString(l) for l in lines]))) if lines else []
         rings = [list(f.exterior.coords[:-1]) for f in faces]
     rings = [r for r in rings if abs(_area(r)) >= _MIN_HOLE_AREA]
@@ -739,13 +773,16 @@ def _pieces(part, to_local: Affine, close_tol: float = _DEFAULT_CLOSE_TOL) -> li
     bboxes = [_poly_bbox(r) for r in rings]
     pieces = []
     for i, r in enumerate(rings):
-        x0, y0 = r[0]
+        # A point inside the ring, not on it: a vertex can touch another ring.
+        x0, y0 = Polygon(r).buffer(0).representative_point().coords[0]
         parents = [q for j, q in enumerate(rings[:i]) if _in_bbox(x0, y0, bboxes[j]) and _inside(x0, y0, q)]
-        if len(parents) % 2 == 0:
+        host = None
+        if len(parents) % 2:  # a hole of the innermost enclosing piece
+            host = next((pc for pc in reversed(pieces)
+                         if _in_bbox(x0, y0, pc["_bbox"]) and _inside(x0, y0, pc["outer"])), None)
+        if host is None:
             pieces.append({"outer": [list(p) for p in r], "holes": [], "_bbox": bboxes[i]})
-        else:  # a hole of the innermost enclosing piece
-            host = next(pc for pc in reversed(pieces)
-                        if _in_bbox(x0, y0, pc["_bbox"]) and _inside(x0, y0, pc["outer"]))
+        else:
             host["holes"].append([list(p) for p in r])
     for pc in pieces:
         del pc["_bbox"]
@@ -781,8 +818,10 @@ def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int],
 def render_with_parts(name: str, args_json: str) -> str:
     """Like render(), plus the recorded walls and their 3D placement.
 
-    Returns {"svg", "parts", "assembly", "dims", "handles", "lines", "thickness"}: "assembly" is false when the generator has no
-    placement function (2D only), or the error message if placing failed.
+    Returns {"svg", "parts", "assembly", "warnings", "dims", "handles", "lines", "thickness"}:
+    "assembly" is false when the generator has no placement function (2D only), or the error
+    message if placing failed. "warnings": problems that leave the 3D view working (a bad ramp
+    value: no ramps).
     """
     global _recorder
     _recorder = rec = _Recorder()
@@ -836,6 +875,7 @@ def render_with_parts(name: str, args_json: str) -> str:
         assembly = placements is not None
     except Exception as e:  # a broken placement must not break the 2D preview
         placements, dims, handles, lines, assembly = None, [], [], [], f"{type(e).__name__}: {e}"
+    warnings = [f"Ramps left out: {box._web_ramp_error}"] if box._web_ramp_error else []
     for i, w in enumerate(parts):
         w["place"] = placements.get(i) if placements else None
         # Size of the cut piece: x/y are the inner frame, without edges like "E" or fingers
@@ -845,10 +885,10 @@ def render_with_parts(name: str, args_json: str) -> str:
         w["size"] = [max(q[k] for q in o["outer"]) - min(q[k] for q in o["outer"]) - kerf
                      for k in (0, 1)] if o else None
     parts = [w for w in parts if not (w["place"] or {}).get("scrap")]
-    return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "dims": dims,
+    return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "warnings": warnings, "dims": dims,
                        "handles": handles,
                        "lines": lines,
-                       "thickness": box.thickness})
+                       "thickness": box.thickness}, allow_nan=False)
 
 
 def _inset(outline: dict, d: float) -> dict | None:
@@ -866,7 +906,8 @@ def _inset(outline: dict, d: float) -> dict | None:
 
 def print_parts(name: str, args_json: str, clearance: float = 0.0) -> str:
     """Parts for 3D printing: outlines without the laser's burn compensation, shrunk by
-    clearance / 2 on every side so each joint gets `clearance` of play in total.
+    clearance / 2 on every side so each joint gets `clearance` of play in total. Printed
+    helpers (ramps) keep their shape and get the play across their width only.
 
     (A negative burn does not work for this: Boxes' burn correction assumes it is positive.)
     Returns {"parts", "thickness"} like render_with_parts().
@@ -875,8 +916,15 @@ def print_parts(name: str, args_json: str, clearance: float = 0.0) -> str:
     result = json.loads(render_with_parts(name, json.dumps(args)))
     if clearance > 0:
         for p in result["parts"]:
-            if p["outline"]:
+            place = p["place"] or {}
+            if p["helper"] == "printed":
+                # Ramps etc.: exact shapes that stand on the floor and lean on a wall, without
+                # burn. Only their width (the extrusion, wall to wall) gets the play, half on
+                # each side.
+                if place.get("t"):
+                    d = min(clearance, place["t"] - 0.1) / 2
+                    place["origin"] = [o + n * d for o, n in zip(place["origin"], place["n"])]
+                    place["t"] -= 2 * d
+            elif p["outline"]:
                 p["outline"] = _inset(p["outline"], clearance / 2)
-            if p["helper"] == "printed" and (p["place"] or {}).get("t"):  # e.g. ramps: fit between the walls
-                p["place"]["t"] = max(p["place"]["t"] - clearance, 0.1)
     return json.dumps({"parts": result["parts"], "thickness": result["thickness"]})
