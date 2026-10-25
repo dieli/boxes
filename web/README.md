@@ -2,6 +2,9 @@
 
 Runs Boxes.py fully in the browser via [Pyodide](https://pyodide.org/) with a live SVG preview.
 
+**Try it online: https://dieli.github.io/boxes/** (the first load takes a few seconds while
+Python starts; after that every change renders in well under a second).
+
 Experimental and largely written with AI assistants; see [How this was made](#how-this-was-made)
 and [Testing](#testing).
 

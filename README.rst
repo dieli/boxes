@@ -1,11 +1,13 @@
 .. note::
 
-   **This is a fork: Boxes.py Live.** It adds a browser version of Boxes.py with a live
-   preview, a 3D assembly view with an editor and STL export (in ``web/``, see
-   `web/README.md <web/README.md>`_), plus a few TrayLayout options (finger holes, sliding
-   lid, liners). The fork's code was largely written with AI assistants ("vibe coded") and is
-   experimental; ``web/README.md`` explains how it was made and tested. For everything else,
-   and for the original project, see `florianfesti/boxes <https://github.com/florianfesti/boxes>`_.
+   **This is a fork: Boxes.py Live.** **Try it online:** https://dieli.github.io/boxes/
+
+   It adds a browser version of Boxes.py with a live preview, a 3D assembly view with an
+   editor and STL export (in ``web/``, see `web/README.md <web/README.md>`_), plus a few
+   TrayLayout options (finger holes, sliding lid, liners). The fork's code was largely
+   written with AI assistants ("vibe coded") and is experimental;
+   ``web/README.md`` explains how it was made and tested. For everything else, and for the
+   original project, see `florianfesti/boxes <https://github.com/florianfesti/boxes>`_.
 
 About Boxes.py
 ==============
