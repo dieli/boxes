@@ -154,7 +154,7 @@ export type AssemblyStatus = boolean | string;
 export type ArgValues = Record<string, string>;
 
 export type ToWorker =
-  | { type: "init"; wheelBase: string }
+  | { type: "init"; wheelBase: string; pyodideBase: string }
   | { type: "schema"; id: number; generator: string }
   | { type: "render"; id: number; generator: string; args: ArgValues }
   | { type: "export"; id: number; generator: string; args: ArgValues; format: string }

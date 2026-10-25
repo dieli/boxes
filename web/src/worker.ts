@@ -7,8 +7,10 @@ const pySources = import.meta.glob("./py/*.py", { query: "?raw", import: "defaul
   string
 >;
 
-const PYODIDE_VERSION = "314.0.7";
-const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+declare const __PYODIDE_VERSION__: string; // from package.json, see vite.config.ts
+// The core (runtime, stdlib, lock file) is served by the app (public/pyodide/); packages come
+// from the CDN of the same version and are checked against the lock file's sha256.
+const PYODIDE_PACKAGE_URL = `https://cdn.jsdelivr.net/pyodide/v${__PYODIDE_VERSION__}/full/`;
 // Prebuilt in Pyodide; qrcode comes from PyPI. svgmerge-only deps (rectpack, svgpathtools) are not needed.
 const PYODIDE_PACKAGES = ["micropip", "affine", "shapely", "numpy", "typing-extensions"];
 // Pinned, so a new PyPI release can't change or break the app without a commit.
@@ -29,13 +31,13 @@ function post(msg: FromWorker) {
   self.postMessage(msg);
 }
 
-async function init(wheelBase: string) {
+async function init(wheelBase: string, pyodideBase: string) {
   const t0 = performance.now();
   post({ type: "status", text: "Loading Python runtime…" });
-  const { loadPyodide } = (await import(/* @vite-ignore */ `${PYODIDE_URL}pyodide.mjs`)) as {
-    loadPyodide: (opts: { indexURL: string }) => Promise<PyodideAPI>;
+  const { loadPyodide } = (await import(/* @vite-ignore */ `${pyodideBase}pyodide.mjs`)) as {
+    loadPyodide: (opts: { indexURL: string; packageBaseUrl: string }) => Promise<PyodideAPI>;
   };
-  const py = await loadPyodide({ indexURL: PYODIDE_URL });
+  const py = await loadPyodide({ indexURL: pyodideBase, packageBaseUrl: PYODIDE_PACKAGE_URL });
 
   post({ type: "status", text: "Loading packages…" });
   await py.loadPackage(PYODIDE_PACKAGES);
@@ -44,13 +46,15 @@ async function init(wheelBase: string) {
   const manifest = (await (await fetch(`${wheelBase}manifest.json`, { cache: "no-cache" })).json()) as {
     wheel: string;
   };
-  const wheel = await fetch(`${wheelBase}${manifest.wheel}`, { cache: "no-cache" });
+  // The wheel's folder is a hash of its content (scripts/build-wheel.mjs): fine to cache.
+  const wheel = await fetch(`${wheelBase}${manifest.wheel}`);
   if (!wheel.ok) throw new Error(`Could not fetch ${manifest.wheel}: ${wheel.status}`);
-  py.FS.writeFile(`/tmp/${manifest.wheel}`, new Uint8Array(await wheel.arrayBuffer()));
+  const wheelFile = manifest.wheel.split("/").pop();
+  py.FS.writeFile(`/tmp/${wheelFile}`, new Uint8Array(await wheel.arrayBuffer()));
   await py.runPythonAsync(`
 import micropip
 await micropip.install("${QRCODE}")
-await micropip.install("emfs:/tmp/${manifest.wheel}", deps=False)
+await micropip.install("emfs:/tmp/${wheelFile}", deps=False)
 `);
 
   post({ type: "status", text: "Loading generators…" });
@@ -75,7 +79,7 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
   try {
     if (msg.type === "init") {
-      await init(msg.wheelBase);
+      await init(msg.wheelBase, msg.pyodideBase);
       return;
     }
     if (!bridge) throw new Error("Worker not initialised");

@@ -117,8 +117,17 @@ function defaultString(arg: ArgSchema): string {
 
 function setValue(arg: ArgSchema, el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string) {
   if (arg.kind === "bool") (el as HTMLInputElement).checked = !["", "0", "false", "off", "none"].includes(value.toLowerCase());
+  else if (arg.kind === "select") el.value = selectValue(arg, value);
   else el.value = value;
   if (el instanceof HTMLTextAreaElement) el.rows = Math.max(3, value.split("\n").length + 1);
+}
+
+/** value if it is one of the options, else the default (else the first option): a select
+ * set to anything else would read as "" (e.g. from an old or hand-edited URL). */
+export function selectValue(arg: ArgSchema & { kind: "select" }, value: string): string {
+  const values = arg.options.map(([v]) => v);
+  if (values.includes(value)) return value;
+  return values.includes(arg.default) ? arg.default : (values[0] ?? "");
 }
 
 function stripMarkdown(s: string): string {

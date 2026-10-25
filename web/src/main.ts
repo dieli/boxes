@@ -3,6 +3,7 @@ import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
 import { defaultLayout, mergeLayout, mergePair, mergeSizes, setLayoutSize, splitLayout, splitSizes, toggleLayout } from "./layout";
 import type { ArgValues, Dimension, GeneratorGroup, GeneratorInfo, GridLine, Handle, Placement, Point2, RecordedPart } from "./protocol";
+import { parseSvg } from "./svg";
 import type { AssemblyView } from "./view3d";
 
 const DEBOUNCE_MS = 150;
@@ -32,8 +33,12 @@ const exportPartSelect = $<HTMLSelectElement>("export-part");
 const clearanceRow = $("print-clearance-row");
 const clearanceInput = $<HTMLInputElement>("print-clearance");
 
-const client = new BoxesClient(new URL("wheels/", document.baseURI).href);
+const client = new BoxesClient(new URL("wheels/", document.baseURI).href, new URL("pyodide/", document.baseURI).href);
 client.onStatus = (text) => (statusEl.textContent = text);
+client.onRestart = (reason) => {
+  statusEl.textContent = "Restarting Python…";
+  console.warn(reason);
+};
 
 let generatorGroups: GeneratorGroup[] = [];
 let generatorList: GeneratorInfo[] = [];
@@ -43,6 +48,11 @@ let lastParts: RecordedPart[] = [];
 let lastThickness = 3;
 let zoom = 1;
 let debounce: number | undefined;
+/** A form change waits for the debounce (not in the undo stack, URL or preview yet). */
+let changePending = false;
+/** Render requests in order; the newest one shown so far (an older result arriving later is dropped). */
+let renderSeq = 0;
+let shownSeq = 0;
 /** Selected part, as the index of its `<g id="p-N">` in the SVG. */
 let selected: number | null = null;
 let view3d: AssemblyView | null = null;
@@ -59,12 +69,18 @@ let keyOfPart = new Map<number, string>();
 const form = new ParamForm($("form"), () => {
   syncLayout();
   clearTimeout(debounce);
-  debounce = window.setTimeout(() => {
-    recordUndo();
-    writeHash();
-    void render();
-  }, DEBOUNCE_MS);
+  changePending = true;
+  debounce = window.setTimeout(flushChange, DEBOUNCE_MS);
 });
+
+function flushChange() {
+  clearTimeout(debounce);
+  if (!changePending) return;
+  changePending = false;
+  recordUndo();
+  writeHash();
+  void render();
+}
 
 // --- Undo / redo of parameter changes (per generator) ---
 
@@ -106,9 +122,15 @@ function recordUndo() {
 }
 
 function stepUndo(delta: number) {
+  // An edit still in its debounce is a step of its own: undo takes that one back.
+  if (changePending) {
+    clearTimeout(debounce);
+    changePending = false;
+    recordUndo();
+    undoLast = { keys: "", at: 0 };
+  }
   const pos = undoPos + delta;
   if (pos < 0 || pos >= undoStack.length) return;
-  clearTimeout(debounce);
   undoPos = pos;
   undoLast = { keys: "", at: 0 };
   const values = undoStack[pos];
@@ -210,16 +232,16 @@ async function loadGenerator(name: string, initial: ArgValues = {}) {
 
 async function render() {
   const name = current;
+  const seq = ++renderSeq;
   const t0 = performance.now();
   try {
     const result = await client.render(name, form.values());
-    if (!result || name !== current) return; // superseded by a newer request
+    // Superseded: by a newer request (null), another generator or a newer result already shown.
+    if (!result || name !== current || seq < shownSeq) return;
+    shownSeq = seq;
     lastParts = result.parts;
     lastThickness = result.thickness;
-    const doc = new DOMParser().parseFromString(result.svg, "image/svg+xml");
-    if (doc.querySelector("parsererror")) throw new Error("The generator produced an invalid SVG");
-    for (const s of doc.querySelectorAll("script")) s.remove();
-    const svgEl = doc.documentElement;
+    const svgEl = parseSvg(result.svg);
     preview.replaceChildren(svgEl);
     const wAttr = Number.parseFloat(svgEl.getAttribute("width") ?? "");
     const hAttr = Number.parseFloat(svgEl.getAttribute("height") ?? "");
@@ -230,15 +252,20 @@ async function render() {
     if (selected !== null && !preview.querySelector(`#p-${selected}`)) selected = null;
     applySelection2d();
     updateExportOptions(result.parts, result.assembly === true);
-    await update3d(name, result);
+    await update3d(name, result, seq);
+    if (seq !== shownSeq) return;
     const total = performance.now() - t0;
     timingEl.textContent = `${total.toFixed(0)} ms (Python ${result.ms.toFixed(0)} ms)`;
     showError(null);
     exportFormatSelect.disabled = false;
     downloadBtn.disabled = false;
   } catch (e) {
+    if (seq < shownSeq) return;
+    shownSeq = seq;
     showError(e);
   }
+  // Renders shown so far, with or without an error: the browser tests wait for this.
+  document.body.dataset.renders = String(Number(document.body.dataset.renders ?? 0) + 1);
 }
 
 function showError(e: unknown) {
@@ -381,7 +408,7 @@ function setDimension(dim: Dimension, value: number) {
   form.set(dim.arg, values.map((x) => String(Math.round(x * 100) / 100)).join(":"));
 }
 
-async function update3d(name: string, result: RenderResult) {
+async function update3d(name: string, result: RenderResult, seq: number) {
   // Placements come from Python (src/py/placements.py). A generator without a placement
   // map shows a placeholder next to the 2D sheet; a failing one shows the error instead of
   // a broken model.
@@ -399,6 +426,7 @@ async function update3d(name: string, result: RenderResult) {
   no3dEl.hidden = !none;
   $("no3d-name").textContent = name;
   if (none) {
+    buildPartsList([]);
     assemblyErrorEl.hidden = true;
     modeEditBtn.disabled = true;
     hasLines = false;
@@ -408,11 +436,12 @@ async function update3d(name: string, result: RenderResult) {
   const warnings = result.warnings ?? [];
   assemblyErrorEl.hidden = !failed && !warnings.length;
   assemblyErrorEl.textContent = failed ? `3D placement failed: ${result.assembly}` : warnings.join(" ");
+  assemblyErrorEl.classList.toggle("warning", !failed);
   flatNote.hidden = !flat || failed;
   flatNote.textContent = `Flat view: no assembly for ${name} yet.`;
   explodeInput.disabled = flat || editMode;
   const view = await getView3d();
-  if (name !== current) return;
+  if (name !== current || seq !== shownSeq) return;
   view.update(result.parts, placements, result.thickness, fittedFor !== name || flat !== fittedFlat, flat);
   fittedFlat = flat;
   if (flat && explodeInput.value !== "0") {
@@ -779,14 +808,14 @@ async function exportStl(format: string) {
     import("./names"),
     client.printParts(current, form.values(), clearance),
   ]);
-  // Same render apart from the burn, so parts line up with lastParts by index.
-  const keys = partKeys(lastParts);
-  const names = parts.map((p, i) => partDisplayLabel(p, i, keys[i] ?? `#${i}`));
+  // Matched to the preview's parts by their keys (label or placement name), not by position.
+  const keys = partKeys(parts);
+  const names = parts.map((p, i) => partDisplayLabel(p, i, keys[i]));
   const stl = (data: ArrayBuffer | null, name: string) => {
     if (data) downloadBlob(new Blob([data], { type: "model/stl" }), `${current}-${name}.stl`);
   };
   if (format === "stl-assembly") {
-    const hidden = new Set(lastParts.flatMap((p, i) => (hiddenKeys.has(keys[i]) ? [p.part] : [])));
+    const hidden = new Set(parts.flatMap((p, i) => (hiddenKeys.has(keys[i]) ? [p.part] : [])));
     const data = assemblyStl(parts, thickness, hidden);
     if (!data) throw new Error("STL (3D assembly): no part is shown in 3D. Show some in the parts list.");
     stl(data, "assembly");
@@ -794,8 +823,9 @@ async function exportStl(format: string) {
     const zip = partsZip(parts, names, thickness);
     if (zip) downloadBlob(zip, `${current}-parts.zip`);
   } else if (format === "stl-part") {
-    const idx = Number(exportPartSelect.value);
-    if (parts[idx]) stl(partStl(parts[idx], thickness), safeName(names[idx]));
+    const idx = keys.indexOf(partKeys(lastParts)[Number(exportPartSelect.value)]);
+    if (idx < 0) throw new Error("STL (one part): that part is gone. Pick it again.");
+    stl(partStl(parts[idx], thickness), safeName(names[idx]));
   }
 }
 

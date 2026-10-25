@@ -252,6 +252,7 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   color: var(--error-text);
   font-size: 12px;
 }
+#assembly-error.warning { color: var(--muted); }
 #flat-note {
   position: absolute;
   bottom: 8px;

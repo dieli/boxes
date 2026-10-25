@@ -52,34 +52,86 @@ export class BoxesError extends Error {
   }
 }
 
-type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
-type RenderRequest = { generator: string; args: ArgValues } & Pending;
+type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
+type RenderRequest = {
+  generator: string;
+  args: ArgValues;
+  resolve: (v: RenderResult | null) => void;
+  reject: (e: Error) => void;
+};
 
 /**
  * Owns the Pyodide worker. Renders are "latest wins": while one render runs,
  * newer requests replace any queued one, and the replaced request resolves to null.
+ *
+ * A request that runs longer than `timeoutMs`, or a worker that dies, rejects the pending
+ * requests and starts a fresh worker (reloading Python takes a few seconds); requests made
+ * meanwhile wait for it. A worker that fails while loading is not restarted.
  */
 export class BoxesClient {
   readonly ready: Promise<ReadyInfo>;
   onStatus: (text: string) => void = () => {};
+  /** The worker was replaced (reason given); the new one reports progress through onStatus. */
+  onRestart: (reason: string) => void = () => {};
+  timeoutMs = 30_000;
 
-  private worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  private worker!: Worker;
+  private started!: Promise<ReadyInfo>;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private rendering = false;
   private queued: RenderRequest | null = null;
 
-  constructor(wheelBase: string) {
-    this.ready = new Promise((resolve, reject) => {
-      this.worker.onmessage = (ev: MessageEvent<FromWorker>) => {
+  constructor(
+    private wheelBase: string,
+    private pyodideBase: string,
+  ) {
+    this.ready = this.start();
+  }
+
+  private start(): Promise<ReadyInfo> {
+    const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+    this.worker = worker;
+    let loaded = false;
+    this.started = new Promise((resolve, reject) => {
+      worker.onmessage = (ev: MessageEvent<FromWorker>) => {
         const msg = ev.data;
         if (msg.type === "status") this.onStatus(msg.text);
-        else if (msg.type === "ready") resolve(msg);
-        else if (msg.type === "error" && msg.id === null) reject(new BoxesError(msg.message, msg.detail));
+        else if (msg.type === "ready") {
+          loaded = true;
+          resolve(msg);
+        } else if (msg.type === "error" && msg.id === null) reject(new BoxesError(msg.message, msg.detail));
         else this.settle(msg);
       };
+      const fail = (message: string) => {
+        if (!loaded) {
+          worker.terminate();
+          reject(new BoxesError(message, message));
+        } else this.restart(worker, message);
+      };
+      worker.onerror = (ev) => {
+        ev.preventDefault();
+        fail(`The Python worker crashed: ${ev.message || "unknown error"}`);
+      };
+      worker.onmessageerror = () => fail("The Python worker sent a message that could not be read");
     });
-    this.post({ type: "init", wheelBase });
+    worker.postMessage({ type: "init", wheelBase: this.wheelBase, pyodideBase: this.pyodideBase } satisfies ToWorker);
+    return this.started;
+  }
+
+  /** Stops `worker` (if still the current one), fails its requests and starts a new one. */
+  private restart(worker: Worker, reason: string) {
+    if (worker !== this.worker) return;
+    worker.terminate();
+    const error = new BoxesError(reason, reason);
+    const pending = [...this.pending.values()];
+    this.pending.clear();
+    this.start().then(
+      () => this.onStatus("Python restarted"),
+      () => {}, // a failed restart rejects the requests that wait for it
+    );
+    this.onRestart(reason);
+    for (const p of pending) p.reject(error);
   }
 
   schema(generator: string): Promise<GeneratorSchema> {
@@ -122,11 +174,23 @@ export class BoxesClient {
   }
 
   private request<T>(build: (id: number) => ToWorker): Promise<T> {
-    const id = this.nextId++;
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.post(build(id));
-    });
+    return this.started.then(
+      () =>
+        new Promise<T>((resolve, reject) => {
+          const id = this.nextId++;
+          const worker = this.worker;
+          const timer = setTimeout(
+            () => this.restart(worker, `Stopped after ${this.timeoutMs / 1000} s: the generator took too long. Restarting Python…`),
+            this.timeoutMs,
+          );
+          const done = () => clearTimeout(timer);
+          this.pending.set(id, {
+            resolve: (v) => (done(), resolve(v as T)),
+            reject: (e) => (done(), reject(e)),
+          });
+          worker.postMessage(build(id));
+        }),
+    );
   }
 
   private settle(msg: Exclude<FromWorker, { type: "status" | "ready" }>) {
@@ -139,12 +203,8 @@ export class BoxesClient {
     else if (msg.type === "exported") p.resolve(msg.content);
     else if (msg.type === "printParts") p.resolve({ parts: msg.parts, thickness: msg.thickness });
     else {
-      const { svg, parts, assembly, dims, handles, lines, thickness, ms } = msg;
-      p.resolve({ svg, parts, assembly, dims, handles, lines, thickness, ms });
+      const { svg, parts, assembly, warnings, dims, handles, lines, thickness, ms } = msg;
+      p.resolve({ svg, parts, assembly, warnings, dims, handles, lines, thickness, ms } satisfies RenderResult);
     }
-  }
-
-  private post(msg: ToWorker) {
-    this.worker.postMessage(msg);
   }
 }
