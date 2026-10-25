@@ -167,13 +167,21 @@ uv run --no-project --with affine --with shapely --with qrcode --with typing_ext
 
 ### What `check_assembly.py` Verifies
 1. **Finger-joint gap fill (`fill >= 90%`)**: Along every finger-joint edge (`f`, `F`, `h`, `b`/`B`/`c`/`C`), the gaps between fingers must be occupied by the mating part's fingers.
-2. **Finger-joint overlap (`overlap <= 5%`)**: The fingers themselves must not intersect another part's solid body.
+2. **Finger-joint overlap (`overlap <= 5%`)**: The fingers themselves must not intersect another part's solid body. Composite edges (compound and slotted edges) are checked finger piece by finger piece for fill.
 3. **Finger-hole occupancy (`fill >= 90%`)**: Every rectangular slot of width $\approx t$ inside a plate or wall must have a mating wall's fingers inside it.
-4. **Coarse 3D body intersection (`<= 1%`)**: No two parts may cut through each other.
+4. **Coarse 3D body intersection (`<= 1%`)**: No two parts may cut through each other. Each pair of parts is checked once, by index (parts with the same label are still compared).
 5. **Unplaced parts warning**: Lists any recorded parts that were left in 2D (`place is None`). (If a cut piece is an offcut rather than a real part, call `a.scrap(part)` so it is omitted from the 3D parts list.)
 
 ### Adding Test Cases
 In `web/scripts/check_assembly.py`, add non-default parameter combinations to `CASES["MyGenerator"]`—especially **asymmetric `sx`/`sy` lists** (e.g. `{"sx": "30:50:70", "sy": "20:60"}`) and **`outside: "1"` / `"0"`**, which immediately catch walls that are rotated $180^\circ$ or flipped inside-out.
+
+### Known upstream problems (`EXPECTED`)
+A problem that comes from the generator itself, not from your placement, goes into `EXPECTED`,
+keyed by `(generator, (argument, value))` so it is only ignored in the cases that show it (or
+`(generator, None)` for every case). Each pattern is a substring of the reported problem, or a
+tuple of substrings that must all be in it. Keep the patterns narrow and add a comment saying why
+the problem is upstream's. Finger holes for parts that stay 2D on purpose (hinges, latches,
+locks) are listed the same way: an unplaced part does not silence the other finger hole checks.
 
 
 ---
@@ -182,7 +190,7 @@ In `web/scripts/check_assembly.py`, add non-default parameter combinations to `C
 
 ### Extra parts (`a.extra`)
 `a.extra(label, outline)` creates a part that the generator never drew, e.g. the 3D printed card
-ramps of `TypeTray`/`TrayLayout`. `outline` is a closed polygon in local coordinates. Place it
+ramps of `TypeTray`/`TrayLayout`. `outline` is a polygon in local coordinates (closed for you if the last point is not the first; the part's size is the outline's span). Place it
 like any other part and give its extrusion as `thickness=`:
 
 ```python
