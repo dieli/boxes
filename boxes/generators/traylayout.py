@@ -455,7 +455,7 @@ a liner glued to the outer wall (no finger joints).
 
     def liners(self) -> None:
         """The liner plates (see removeZeroSizes()): as high as the inner walls, plain edges,
-        finger holes in the top where the outer wall behind them has finger holes."""
+        finger holes in the top of the back and front ones like the inner walls."""
         pieces = getattr(self, "liner_pieces", [])
         if not pieces:
             return
@@ -468,9 +468,10 @@ a liner glued to the outer wall (no finger joints).
             lengths.pop()
             along_x = p["side"] in ("back", "front")
             top: str | boxes.edges.BaseEdge = "e"
-            # Finger holes only where the outer wall behind has them, too: never on the left
-            # and right (walls along y have none), front and back as hasFingerHoles().
-            if along_x and self.hasFingerHoles(0 if p["side"] == "back" else len(self.y)):
+            # A liner is the wall its compartments see, so it is notched like an inner wall,
+            # whatever the outer wall behind it gets. Never on the left and right: walls
+            # along y have no finger holes.
+            if along_x and self.fingerholes != "none":
                 top = boxes.edges.CompoundEdge(
                     self, ["Ae"[i % 2] for i in range(len(lengths))], lengths[::-1])
             line = self.yLineIndex(0 if p["side"] == "back" else len(self.y)) if along_x else \

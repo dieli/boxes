@@ -157,13 +157,14 @@ def test_zero_size_edge_rows_and_columns_become_liners():
     assert len(liners) == len(box.liner_pieces)
 
 
-@pytest.mark.parametrize("fingerholes, back_notched", [("front", False), ("back", True)])
-def test_liner_notches_follow_their_outer_wall(fingerholes, back_notched):
+@pytest.mark.parametrize("fingerholes, back_notched", [("none", False), ("inside-only", True), ("front", True),
+                                                       ("back", True)])
+def test_liners_are_notched_like_inner_walls(fingerholes, back_notched):
     box, walls = build("--h=50", f"--fingerholes={fingerholes}", "--layout=" + LINERS)
     liners = [w for w in walls if w["y"] == box.hi and w["edges"][0] == "e" and w["edges"][1] == "e"
               and w["edges"][3] == "e" and w["x"] > 10]
     assert len(liners) == len(box.liner_pieces)
-    # Back liner along x: notches as the back wall. Left liner: never.
+    # Back liner along x: notched like an inner wall, also where the back wall is not. Left: never.
     for w, piece in zip(liners, box.liner_pieces):
         assert ("A" in w["edges"][2]) == (piece["side"] == "back" and back_notched), piece
 
