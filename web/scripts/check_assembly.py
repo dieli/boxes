@@ -266,6 +266,10 @@ CASES: dict[str, list[dict]] = {
 _HINGE_HOLES = tuple(f"finger hole at {x}," for x in
                      ("6.2", "12.4", "18.8", "72.2", "78.5", "84.8", "9.3", "15.6", "75.4", "81.7"))
 
+# Parts the placement map leaves out (see "unplaced" in check()): by label, or any unlabelled one.
+_2D = "unplaced (2D only): "
+_2D_UNLABELLED = _2D + "#"
+
 # Problems that come from upstream's design, per generator and argument value.
 # A pattern is a substring of the problem, or a tuple of substrings that must all be in it.
 EXPECTED = {  # (generator, (argument, value) or None for every case): problems to ignore
@@ -281,13 +285,15 @@ EXPECTED = {  # (generator, (argument, value) or None for every case): problems 
     ("SmallPartsTray", ("front_panel", "off")): ("edge 1 'f'", "edge 3 'f'", "edge 3 '?'"),
     # The back rail is 8 t shorter than the shelf's finger hole line in the back: its end holes
     # stay empty (any case). Without rails, slots without shelves are empty.
-    ("HobbyCase", None): ("base plate",),
-    ("HobbyCase", ("add_rails", "off")): ("finger hole",),
+    ("HobbyCase", None): (("base plate", "finger hole", "fill 0%"),),
+    ("HobbyCase", ("add_rails", "off")): (("finger hole", "fill 0%"),),
     # Supports cut inside the shelves' can holes are recorded as part of the shelf.
-    ("SpicesRack", ("in_place_supports", "on")): ("finger hole",),
+    ("SpicesRack", ("in_place_supports", "on")): (("(325x", "finger hole", "fill 0%"),),
     # The slot for the latch (2D) in the rail holder cuts through its middle finger.
-    ("DinRailBox", None): ("(70x8) finger hole", "Back finger hole at 32.0"),
-    ("SmallPartsTray2", ("back_height", "20")): ("front", "side edge 1", "side finger hole", "inner y"),
+    ("DinRailBox", None): ("(70x8) finger hole", "Back finger hole at 32.0", _2D_UNLABELLED),  # latch
+    ("SmallPartsTray2", ("back_height", "20")): (
+        "front finger hole", "front edge 1 'f'", "front edge 3 'f'", "front cuts into slope",
+        "side edge 1 'h'", "side finger hole", ("inner y", "edge 1 '?'")),
     # Without Sturdy the outer supports stand flush with the bottom's edges: their finger holes
     # touch the outline and become notches.
     ("HalfBox", None): ("bottom cuts into support",),
@@ -309,15 +315,33 @@ EXPECTED = {  # (generator, (argument, value) or None for every case): problems 
     # frames' plain (E) bottom edge. The outer frames' top finger holes hold nothing.
     ("AirPurifier", None): ("top edge", "bottom edge", "bottom finger hole", "edge 0 'F'",
                             "edge 2 'f'", "edge 2 'h'", "x30) finger hole", "x493) finger hole",
-                            "cuts into bottom", "cuts into top"),
+                            "(498x30) cuts into bottom", "(498x30) cuts into top"),
     # Parts drawn in 2D only (see "unplaced"): the finger holes they go into stay empty.
     # Hinges of the v top edge (HingeBox: its default lid).
-    ("HingeBox", None): _HINGE_HOLES,
-    ("UniversalBox", ("top_edge", "v")): _HINGE_HOLES,
-    # The latch parts on the cover's end and the back.
-    ("FlexBook", None): (("#1 (", "finger hole"), ("#3 (", "finger hole")),
-    # The lock parts in the door.
-    ("CoinBankSafe", None): (("#5 (", "finger hole"),),
+    ("HingeBox", None): _HINGE_HOLES + (_2D + "hinges",),
+    ("UniversalBox", ("top_edge", "v")): _HINGE_HOLES + (_2D + "hinges",),
+    # The latch parts on the cover's end and the back (latch brackets and pin).
+    ("FlexBook", None): (("#1 (", "finger hole"), ("#3 (", "finger hole"), _2D_UNLABELLED),
+    # The lock parts in the door (dials, pins and handle).
+    ("CoinBankSafe", None): (("#5 (", "finger hole"), _2D_UNLABELLED),
+    # Parts drawn in 2D only by design (the placement's docstring says which).
+    ("DividerTray", None): (_2D_UNLABELLED,),  # single dividers, alternatives to the full one
+    ("GridfinityDrillBox", None): (_2D_UNLABELLED,),  # small feet glued under the bottom
+    ("MakitaPowerSupply", None): (_2D_UNLABELLED,),  # the rails' inner plates
+    ("PaintStorage", None): (_2D_UNLABELLED,),  # strips
+    ("RollHolder", None): (_2D_UNLABELLED,),  # axle rings
+    ("WallRollHolder", None): (_2D_UNLABELLED,),  # axle rings
+    ("TrafficLight", None): (_2D + "colored windows",),
+    # Known gaps: parts the placement map does not place yet (to be fixed, then removed here).
+    ("Crate", ("MakeStackable", "0")): (_2D_UNLABELLED,),  # 4 strips, 6 wide
+    ("GridfinityTrayLayout", ("ny", "3")): (_2D_UNLABELLED,),  # one 36x36 pad
+    ("SBCMicroRack", ("switch", "1")): (_2D_UNLABELLED,),  # a 170.5x63 plate
+    ("SmallPartsTray", None): (_2D_UNLABELLED,),  # 3 squares of 10.6x10.6
+    ("SpicesRack", ("feet", "1")): (_2D_UNLABELLED,),  # 4 feet
+    ("StackableBin", None): (_2D + "for label (optional)",),
+    ("UBox", ("top_edge", "i")): (_2D + "wall",),
+    ("UBox", ("top_edge", "k")): (_2D + "wall",),
+    ("WineRack", ("walls", "minimal")): (_2D_UNLABELLED,),  # 8 plates of 54.8x210
 }
 
 # Generators whose default arguments are degenerate upstream; only CASES are checked.
@@ -398,11 +422,15 @@ class BendPath:
             yield x0 + l, z, (l >= -1e-6) & (x0 + l <= x1 + 1e-6)
 
 
+def part_name(rec: dict) -> str:
+    return rec["label"] or f"#{rec['part']} ({rec['x']:g}x{rec['y']:g})"
+
+
 class Solid:
     def __init__(self, rec: dict, t: float) -> None:
         o = rec["outline"]
         self.rec = rec
-        self.name = rec["label"] or f"#{rec['part']} ({rec['x']:g}x{rec['y']:g})"
+        self.name = part_name(rec)
         self.poly = Polygon(o["outer"], o["holes"])
         p = rec["place"]
         self.o = np.array(p["origin"], float)
@@ -501,9 +529,8 @@ def check(name: str, args: dict) -> list[str]:
     if r["assembly"] is not True:
         return [f"assembly: {r['assembly']}"]
     t = r["thickness"]
-    unplaced = [p["label"] or f"#{p['part']}" for p in r["parts"] if not p["place"]]
-    if unplaced:
-        problems.append(f"unplaced (2D only): {', '.join(unplaced)}")
+    problems += [f"warning: {w}" for w in r["warnings"]]
+    problems += [f"unplaced (2D only): {part_name(p)}" for p in r["parts"] if not p["place"]]
     solids = [Solid(p, t) for p in r["parts"] if p["place"] and p["outline"]]
     # Coarse body check: fraction of a's area inside b, for every ordered pair (a, b).
     cut: dict[tuple[int, int], float] = {}
@@ -588,7 +615,7 @@ def main(names: list[str]) -> int:
     for name in names or sorted(PLACEMENTS):
         for args in ([] if name in SKIP_DEFAULTS else [{}]) + CASES.get(name, []):
             problems = check(name, args)
-            soft = ("unplaced",) + expected(name, args)
+            soft = expected(name, args)
             hard = [p for p in problems
                     if not any(all(q in p for q in s) if isinstance(s, tuple) else s in p for s in soft)]
             failed += bool(hard)

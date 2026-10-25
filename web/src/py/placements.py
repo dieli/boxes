@@ -197,6 +197,10 @@ def universal_box(a: Assembly) -> None:
     _outer_walls(a, f, {"front": "front", "back": "back", "left": "left",
                         "right": "right", "bottom": "bottom"})
     place_lids(a, f, b.top_edge)
+    # top_edge f/F: a frame 2 t wider all round, its hole around the top plate's edge.
+    ring = a.parts.label("top hole")
+    if ring is not None:
+        f.plate(ring, f.h, x0=-2 * a.t, y0=-2 * a.t)
 
 
 @placement("ABox")
