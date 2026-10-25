@@ -23,12 +23,26 @@ from boxes import lids
 from boxes.generators.typetray import FingerHoleEdge, FingerHoleEdgeSettings
 
 
-_MAGNET_DOC = " * magnet_diameter : 0.0 : diameter of magnet holes in mm (sliding lid only; 0 to disable)\n"
-
-
 class TrayLidSettings(lids.LidSettings):
-    __doc__ = (lids.LidSettings.__doc__ or "") if "magnet_diameter" in (lids.LidSettings.__doc__ or "") else \
-        (lids.LidSettings.__doc__ or "").replace("\n* relative", _MAGNET_DOC + "\n* relative", 1)
+    """Settings for the Lid
+Values:
+
+* absolute
+
+ * style : "none" : type of lid to create ("sliding": slides in over the lowered front wall)
+ * handle : "none" : type of handle
+ * brim_spacing : 0.1 : space between the brim and the walls in mm (for flat* and sliding lids)
+ * magnet_diameter : 0.0 : diameter of magnet holes in mm (sliding lid only; 0 to disable)
+
+* relative (in multiples of thickness)
+
+ * height : 4.0 : height of the brim in multiples of thickness (if any)
+ * play : 0.1 : play when sliding the lid on in multiples of thickness (if applicable)
+ * handle_height : 8.0 : height of the handle in multiples of thickness (if applicable)
+ * brim_height : 1.0 : height of the brim in multiple of thickness (for flatbrim lids)
+ * fang_size : 1.0 : size of the fangs in multiples of thickness (for flatfang lids)
+
+"""
 
     absolute_params = {
         **lids.LidSettings.absolute_params,
@@ -191,6 +205,9 @@ class TrayLayout(Boxes):
     ui_group = "Tray"
 
     fingerholes = "none"  # for subclasses with their own arguments
+
+    lid_settings_class = TrayLidSettings
+    lid_class = TrayLid
 
     # Set by parse(): walls on the "+-+" lines, walls before each column, floors per cell.
     hwalls: list[list[bool]]
@@ -882,22 +899,6 @@ a liner glued to the outer wall (no finger joints).
         for l in floors:
             l.append(False)
         floors.append([False] * (lx+1))
-
-    def _buildObjects(self) -> None:
-        # the core Lid only knows the generic styles and params
-        lid = self.edgesettings.get("Lid", {})
-        base = lids.LidSettings
-        known = {**base.absolute_params, **base.relative_params}
-        core = {k: v for k, v in lid.items() if k in known}
-        if core.get("style") not in base.absolute_params["style"]:
-            core["style"] = "none"
-        self.edgesettings["Lid"] = core
-        try:
-            super()._buildObjects()
-        finally:
-            self.edgesettings["Lid"] = lid
-        self.lidSettings = TrayLidSettings(self.thickness, True, **lid)
-        self.lid = TrayLid(self, self.lidSettings)
 
     def render(self) -> None:
         self.prepare()

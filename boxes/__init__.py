@@ -345,6 +345,12 @@ class Boxes:
 
     description: str = ""  # Markdown syntax is supported
 
+    # Lid classes for self.lidSettings / self.lid; a generator can set subclasses, e.g. with
+    # more lid styles (add them with addSettingsArgs(<settings class>, prefix="Lid")).
+    # None: lids.LidSettings and lids.Lid.
+    lid_settings_class: type | None = None
+    lid_class: type | None = None
+
     def __init__(self) -> None:
         self.formats = formats.Formats()
         self.ctx: Context = None # type: ignore
@@ -729,9 +735,9 @@ class Boxes:
                 **self.edgesettings.get("HexHoles", {}))
         # Lids
         from . import lids
-        self.lidSettings = lids.LidSettings(self.thickness, True,
-                                       **self.edgesettings.get("Lid", {}))
-        self.lid = lids.Lid(self, self.lidSettings)
+        self.lidSettings = (self.lid_settings_class or lids.LidSettings)(
+            self.thickness, True, **self.edgesettings.get("Lid", {}))
+        self.lid = (self.lid_class or lids.Lid)(self, self.lidSettings)
 
         # Nuts
         self.addPart(NutHole(self, None))
