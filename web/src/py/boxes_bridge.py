@@ -313,10 +313,38 @@ class _Recorder:
 _recorder: _Recorder | None = None
 
 
+def _edge_pieces(box, e, start: float = 0.0) -> list[dict] | None:
+    """Plain edges a CompoundEdge or SlottedEdge is made of: (start, length) along the edge,
+    char, type, startWidth. None for other edges."""
+    out: list[dict] = []
+    if isinstance(e, boxes.edges.CompoundEdge):
+        runs = list(zip(e.types, e.lengths))
+    elif isinstance(e, boxes.edges.SlottedEdge):
+        runs = []
+        for k, l in enumerate(e.sections):
+            runs.append((e.edge, l))
+            if k < len(e.sections) - 1:
+                runs.append((None, e.settings.thickness))  # the slot
+    else:
+        return None
+    for sub, l in runs:
+        if sub is not None:
+            sub = box.edges.get(sub, sub)
+            inner = _edge_pieces(box, sub, start)
+            if inner is not None:
+                out += inner
+            else:
+                out.append({"start": start, "length": l, "char": getattr(sub, "char", None),
+                            "type": type(sub).__name__, "startWidth": sub.startWidth()})
+        start += l
+    return out
+
+
 def _edge_info(box, e) -> dict:
     e = box.edges.get(e, e)
     return {
         "char": getattr(e, "char", None),
+        "pieces": _edge_pieces(box, e),
         "type": type(e).__name__,
         "startWidth": e.startWidth(),
         "endWidth": e.endWidth(),

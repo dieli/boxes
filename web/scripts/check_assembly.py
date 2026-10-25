@@ -46,6 +46,17 @@ _LAYOUT = """ ,> 40mm
 +-+-+-+
 """
 
+# A gap in the back wall (sliding lid: the back finger holes follow the wall's runs).
+_BACK_GAP = """ ,> 40mm
+ | ,> 60mm
+ | | ,> 30mm
++-+ +-+
+| | | |  50mm
++-+-+-+
+| | | |  40mm
++-+-+-+
+"""
+
 # 0 mm edge rows/columns: liners glued to the outer walls (back and left; front and right
 # with a gap in the front liner, a compartment without floor and an inner wall ending at it).
 _LINER_BL = """ ,> 0mm
@@ -208,7 +219,11 @@ CASES: dict[str, list[dict]] = {
                      {"vertical_edges": "finger holes"}, {"bottom_edge": "h"},
                      {"Lid_style": "flatfang"}, {"Lid_style": "overthetop"}],
     "TypeTray": [{"sx": "30:50:70", "sy": "20:60"}, {"top_edge": "f"}, {"bottom_edge": "e"},
-                 {"ramp": "1"}, {"ramp": "1", "ramp_side": "left", "hi": "15", "ramp_height": "40"}],
+                 {"ramp": "1"}, {"ramp": "1", "ramp_side": "left", "hi": "15", "ramp_height": "40"},
+                 {"back_height": "20"}, {"back_height": "20", "sx": "30:50", "sy": "20:60:40"},
+                 {"back_height": "20", "ramp": "1", "ramp_side": "back"}, {"handle": "1"},
+                 {"top_edge": "f", "Lid_style": "overthetop"}, {"Lid_style": "flat"},
+                 {"Lid_style": "flat", "ramp": "1"}],
     "TrayLayout": [{"sx": "30:50:70", "sy": "20:60"}, {"outside": "0", "hi": "40"},
                    {"hi": "120"}, {"layout": _LAYOUT}, {"layout": _LAYOUT, "outside": "0"},
                    {"Lid_style": "flat"}, {"Lid_style": "overthetop"},
@@ -220,7 +235,20 @@ CASES: dict[str, list[dict]] = {
                    {"layout": _LINER_BL}, {"layout": _LINER_BL, "outside": "0", "fingerholes": "inside-only"},
                    {"layout": _LINER_FR}, {"layout": _LINER_FR, "Lid_style": "sliding", "hi": "40"},
                    *({"layout": l, "ramp": "1", "ramp_side": s} for l in (_LINER_BL, _LINER_FR)
-                     for s in ("front", "back", "left", "right"))],
+                     for s in ("front", "back", "left", "right")),
+                   # Inner walls higher than the outer ones, with finger holes (U1-G-01).
+                   {"h": "40", "hi": "80", "fingerholes": "front-and-back"},
+                   # Flat lid on inner walls as high as the outer ones (N-05).
+                   {"Lid_style": "flat", "h": "30"}, {"Lid_style": "flat", "h": "30", "hi": "20"},
+                   # Sliding lid with finger holes, a handle, magnets, an open back, low walls.
+                   {"Lid_style": "sliding", "fingerholes": "front-and-back"},
+                   {"Lid_style": "sliding", "fingerholes": "back", "ramp": "1", "ramp_side": "back"},
+                   {"Lid_style": "sliding", "Lid_handle": "long_rounded"},
+                   {"Lid_style": "sliding", "Lid_magnet_diameter": "6", "Lid_handle": "knob"},
+                   {"Lid_style": "sliding", "layout": _BACK_GAP},
+                   {"Lid_style": "sliding", "ramp": "1", "h": "20"},
+                   {"Lid_style": "sliding", "ramp": "1", "ramp_side": "front", "h": "20",
+                    "fingerholes": "front"}],
     "ClosedBox": [{"x": "60", "y": "120", "h": "40"}],
     "CardBox": [{"openingdirection": "right"}, {"sx": "40:65", "add_lidtopper": "1"}],
     "DiceBox": [{"lidheight": "25"}],
@@ -230,49 +258,63 @@ CASES: dict[str, list[dict]] = {
     "BeeQueenTransportBox": [{"bottom_edge": "F"}, {"sh": "12:30:40"}],
 }
 
-# Problems that come from upstream's design, per generator and BoxStyle-like argument value.
-EXPECTED = {  # (generator, argument value or None for every case): problems to ignore
+# Finger holes of the hinges of the v (ChestHinge) top edge with the default x, in the back
+# wall and the lid top.
+_HINGE_HOLES = tuple(f"finger hole at {x}," for x in
+                     ("6.2", "12.4", "18.8", "72.2", "78.5", "84.8", "9.3", "15.6", "75.4", "81.7"))
+
+# Problems that come from upstream's design, per generator and argument value.
+# A pattern is a substring of the problem, or a tuple of substrings that must all be in it.
+EXPECTED = {  # (generator, (argument, value) or None for every case): problems to ignore
     # Front and face have three peg holes, but only two pegs are drawn.
-    ("NightLightBox", "extra customizable face"): ("front finger hole", "customizable face finger hole"),
+    ("NightLightBox", ("BoxStyle", "extra customizable face")): ("front finger hole", "customizable face finger hole"),
     # The inner vertical walls list sh bottom to top on their back edge (SlottedEdge(self.sh)),
     # the back plate and their own front edge top to bottom: uneven rows miss the holes.
-    ("BinTray", "30:60:45"): ("back finger hole", "inner vertical"),
+    ("BinTray", ("sh", "30:60:45")): ("back finger hole", "inner vertical"),
     # With back_height the front wall is h high (holes too), the sides' front edge and the
     # inner walls only hi - t*sqrt(2): it sticks out and its upper holes stay empty.
     # One-sided without front panel: the sides get a plain bottom edge, the floor's finger
     # joints to them have nothing to go into.
-    ("SmallPartsTray", "off"): ("edge 1 'f'", "edge 3 'f'"),
+    ("SmallPartsTray", ("front_panel", "off")): ("edge 1 'f'", "edge 3 'f'", "edge 3 '?'"),
     # The back rail is 8 t shorter than the shelf's finger hole line in the back: its end holes
     # stay empty (any case). Without rails, slots without shelves are empty.
     ("HobbyCase", None): ("base plate",),
-    ("HobbyCase", "off"): ("finger hole",),
+    ("HobbyCase", ("add_rails", "off")): ("finger hole",),
     # Supports cut inside the shelves' can holes are recorded as part of the shelf.
-    ("SpicesRack", "on"): ("finger hole",),
+    ("SpicesRack", ("in_place_supports", "on")): ("finger hole",),
     # The slot for the latch (2D) in the rail holder cuts through its middle finger.
     ("DinRailBox", None): ("(70x8) finger hole", "Back finger hole at 32.0"),
-    ("SmallPartsTray2", "20"): ("front", "side edge 1", "side finger hole", "inner y"),
+    ("SmallPartsTray2", ("back_height", "20")): ("front", "side edge 1", "side finger hole", "inner y"),
     # Without Sturdy the outer supports stand flush with the bottom's edges: their finger holes
     # touch the outline and become notches.
     ("HalfBox", None): ("bottom cuts into support",),
     # even n leaning inwards: the corner jogs of the G edges graze the neighbour wall (~1%)
-    ("RegularBox", "35"): ("cuts into",),
+    ("RegularBox", ("radius_top", "35")): ("cuts into",),
     # sharpcorners: the walls are lengthened for a 22.5 degree bevel ground on by hand
-    ("TriangleLamp", "1"): ("cuts into",),
+    ("TriangleLamp", ("sharpcorners", "1")): ("cuts into",),
     # The door is cut for pi r / 2 at the outer radius, longer than its closed path: with its
     # end on the floor, the handle at its start runs into the fixed top.
     ("BreadBox", None): ("cuts into #7 (6x",),
     # The balcony walls are cut to their outer length; their ends are mitred by hand along the
     # etched lines, so plain slabs overlap at the corners.
     ("FatBallDispenser", None): ("x23) cuts into #",),
-    ("FatBallDispenser", "35"): ("x38) cuts into #",),
+    ("FatBallDispenser", ("balcony_height", "35")): ("x38) cuts into #",),
     # Without a back, the inner horizontal walls still have finger joints there.
-    ("TrafficLight", "e"): ("edge 0 'f'",),
+    ("TrafficLight", ("back_edge", "e")): ("edge 0 'f'",),
     # Upstream: the inner frames' bottom edge is F but the bottom has finger holes (fit f), their
     # top edge and the top's are both f, and the bottom's front/back fingers meet the outer
     # frames' plain (E) bottom edge. The outer frames' top finger holes hold nothing.
     ("AirPurifier", None): ("top edge", "bottom edge", "bottom finger hole", "edge 0 'F'",
                             "edge 2 'f'", "edge 2 'h'", "x30) finger hole", "x493) finger hole",
                             "cuts into bottom", "cuts into top"),
+    # Parts drawn in 2D only (see "unplaced"): the finger holes they go into stay empty.
+    # Hinges of the v top edge (HingeBox: its default lid).
+    ("HingeBox", None): _HINGE_HOLES,
+    ("UniversalBox", ("top_edge", "v")): _HINGE_HOLES,
+    # The latch parts on the cover's end and the back.
+    ("FlexBook", None): (("#1 (", "finger hole"), ("#3 (", "finger hole")),
+    # The lock parts in the door.
+    ("CoinBankSafe", None): (("#5 (", "finger hole"),),
 }
 
 # Generators whose default arguments are degenerate upstream; only CASES are checked.
@@ -392,15 +434,17 @@ def segments(rec: dict) -> list[tuple[np.ndarray, np.ndarray, float]]:
     return [(np.array(p0), np.array(d), length) for p0, d, length in Part(0, rec).segments()]
 
 
-def edge_band(s: Solid, i: int, step: float = 0.25):
-    """Local sample points in the joint strip of width t along edge i (corners excluded)."""
+def edge_band(s: Solid, i: int, step: float = 0.25, span: tuple[float, float] | None = None):
+    """Local sample points in the joint strip of width t along edge i (corners excluded), or
+    along span (start, end) of it: one piece of a composite edge."""
     t = s.t
     segs = segments(s.rec)
     if i >= len(segs):
         return None
     p0, d, length = segs[i]
+    a0, a1 = span or (0.0, length)
     # Corners are trimmed by ignore_widths etc.; half-step phase keeps samples off finger boundaries.
-    along = np.arange(2 * t + step / 2, length - 2 * t, step)
+    along = np.arange(a0 + 2 * t + step / 2, a1 - 2 * t, step)
     if along.size == 0:
         return None
     ccw = sum(q[0] * dq[1] * l - q[1] * dq[0] * l for q, dq, l in segs) > 0  # shoelace
@@ -434,6 +478,16 @@ def finger_hole(hole, t: float):
     return np.full_like(along, cx), along
 
 
+def finger_edge(e: dict, args: dict) -> bool:
+    """Is edge (or composite edge piece) e a finger joint whose gaps another part fills?"""
+    # A letter of FINGER_EDGES a generator uses for its own edge (KeyHolder's H hook).
+    own = e.get("type") and e["type"] not in FINGER_TYPES
+    return ((e["char"] in FINGER_EDGES and not own)
+            or (e.get("type") in FINGER_TYPES and e.get("angle") == 90)
+            or (e["char"] in WALL_EDGES and (e.get("type") or "").startswith("Wall")
+                and args.get("walltype", "plain") == "plain"))
+
+
 def check(name: str, args: dict) -> list[str]:
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -456,27 +510,36 @@ def check(name: str, args: dict) -> list[str]:
         def hit(w):
             return np.any([b.contains(w) for b in others], axis=0) if others else np.zeros(len(w), bool)
 
+        inner, outer = a.poly.buffer(-0.05), a.poly.buffer(0.05)
         for i, e in enumerate(a.rec["edges"]):
-            # Composite edges (slotted, compound, ...): only check that nothing cuts in.
+            # Composite edges (slotted, compound, ...): their finger pieces are checked one by
+            # one; overlap is checked over the whole edge.
+            pieces = e.get("pieces")
             composite = e["char"] is None
-            # A letter of FINGER_EDGES a generator uses for its own edge (KeyHolder's H hook).
-            own = e.get("type") and e["type"] not in FINGER_TYPES
-            if not composite and (e["char"] not in FINGER_EDGES or own) and not (
-                    e.get("type") in FINGER_TYPES and e.get("angle") == 90) and not (
-                    e["char"] in WALL_EDGES and e.get("type", "").startswith("Wall")
-                    and args.get("walltype", "plain") == "plain"):
+            if composite:
+                fill_spans = [(q["start"], q["start"] + q["length"]) for q in pieces or ()
+                              if finger_edge(q, args) and q["startWidth"] == e["startWidth"]]
+            elif finger_edge(e, args):
+                fill_spans = [None]
+            else:
                 continue
             band = edge_band(a, i)
             if band is None:
                 continue
             x, y = band
-            ina = contains_xy(a.poly, x, y)
+            # Points right on the outline (finger boundaries) count as neither.
+            ina = contains_xy(inner, x, y)
             filled = hit(a.world(x, y, np.full_like(x, a.t / 2)))
-            gaps, fingers = ~ina, ina
-            fill = filled[gaps].mean() if gaps.any() else 1.0
-            overlap = filled[fingers].mean() if fingers.any() else 0.0
-            if composite:
-                fill = 1.0
+            overlap = filled[ina].mean() if ina.any() else 0.0
+            fill = 1.0
+            for span in fill_spans:
+                band = edge_band(a, i, span=span) if span else (x, y)
+                if band is None:
+                    continue
+                px, py = band
+                gaps = ~contains_xy(outer, px, py)
+                if gaps.any():
+                    fill = min(fill, hit(a.world(px[gaps], py[gaps], np.full(gaps.sum(), a.t / 2))).mean())
             if fill < FILL_MIN or overlap > OVERLAP_MAX:
                 problems.append(f"{a.name} edge {i} '{e['char'] or '?'}': fill {fill:.0%}, overlap {overlap:.0%}")
         for hole in a.rec["outline"]["holes"]:
@@ -498,17 +561,23 @@ def check(name: str, args: dict) -> list[str]:
         for ib, b in enumerate(solids):
             if b is not a:
                 cut[ia, ib] = b.contains(w).mean() if len(w) else 0.0
-    # Each pair once (by name), but checked both ways: a small part inside a large one covers
-    # little of the large one's area.
+    # Each pair once, but checked both ways: a small part inside a large one covers little of
+    # the large one's area.
     for (ia, ib), frac in cut.items():
-        a, b = solids[ia], solids[ib]
-        if a.name > b.name:
+        if ia > ib:
             continue
+        a, b = solids[ia], solids[ib]
         if frac > 0.01:
             problems.append(f"{a.name} cuts into {b.name}: {frac:.0%} of its area")
-        elif a.name != b.name and cut[ib, ia] > 0.01:
+        elif cut[ib, ia] > 0.01:
             problems.append(f"{b.name} cuts into {a.name}: {cut[ib, ia]:.0%} of its area")
     return problems
+
+
+def expected(name: str, args: dict) -> tuple:
+    """Problems to ignore for this case (see EXPECTED)."""
+    return sum((v for (n, kv), v in EXPECTED.items()
+                if n == name and (kv is None or args.get(kv[0]) == kv[1])), ())
 
 
 def main(names: list[str]) -> int:
@@ -516,9 +585,9 @@ def main(names: list[str]) -> int:
     for name in names or sorted(PLACEMENTS):
         for args in ([] if name in SKIP_DEFAULTS else [{}]) + CASES.get(name, []):
             problems = check(name, args)
-            soft = ("unplaced",) + (("finger hole",) if any(p.startswith("unplaced") for p in problems) else ())
-            soft += sum((v for (n, a), v in EXPECTED.items() if n == name and (a is None or a in args.values())), ())
-            hard = [p for p in problems if not any(s in p for s in soft)]
+            soft = ("unplaced",) + expected(name, args)
+            hard = [p for p in problems
+                    if not any(all(q in p for q in s) if isinstance(s, tuple) else s in p for s in soft)]
             failed += bool(hard)
             print(f"{'FAIL' if hard else 'ok  '} {name} {args or ''}")
             for p in problems:
