@@ -229,7 +229,7 @@ async function render() {
     applyZoom();
     if (selected !== null && !preview.querySelector(`#p-${selected}`)) selected = null;
     applySelection2d();
-    updateExportOptions(result.parts);
+    updateExportOptions(result.parts, result.assembly === true);
     await update3d(name, result);
     const total = performance.now() - t0;
     timingEl.textContent = `${total.toFixed(0)} ms (Python ${result.ms.toFixed(0)} ms)`;
@@ -391,11 +391,8 @@ async function update3d(name: string, result: RenderResult) {
   // No assembly (or a failed one): the parts lie flat, as on the sheet.
   const flat = !placements.size;
   if (flat) {
-    result.parts.forEach((p, i) => {
-      if (!p.outline) return;
-      p.place = flatPlacement(p);
-      placements.set(i, p.place);
-    });
+    // Only for the view: the parts stay unplaced (parts list, STL export).
+    result.parts.forEach((p, i) => p.outline && placements.set(i, flatPlacement(p)));
   }
   const none = !placements.size;
   panel3d.classList.toggle("none", none);
@@ -408,8 +405,9 @@ async function update3d(name: string, result: RenderResult) {
     setEditMode(false);
     return;
   }
-  assemblyErrorEl.hidden = !failed;
-  assemblyErrorEl.textContent = failed ? `3D placement failed: ${result.assembly}` : "";
+  const warnings = result.warnings ?? [];
+  assemblyErrorEl.hidden = !failed && !warnings.length;
+  assemblyErrorEl.textContent = failed ? `3D placement failed: ${result.assembly}` : warnings.join(" ");
   flatNote.hidden = !flat || failed;
   flatNote.textContent = `Flat view: no assembly for ${name} yet.`;
   explodeInput.disabled = flat || editMode;
@@ -471,7 +469,7 @@ function partDisplayLabel(p: RecordedPart, i: number, key: string): string {
   return key.startsWith("#") ? p.place?.name || `part ${i + 1}` : key;
 }
 
-function updateExportOptions(parts: RecordedPart[]) {
+function updateExportOptions(parts: RecordedPart[], assembled: boolean) {
   const keys = partKeys(parts);
   const prevIdx = exportPartSelect.value;
   exportPartSelect.replaceChildren();
@@ -482,9 +480,9 @@ function updateExportOptions(parts: RecordedPart[]) {
   });
   const hasOutlines = exportPartSelect.options.length > 0;
   for (const opt of exportFormatSelect.options) {
-    if (opt.value.startsWith("stl-")) opt.disabled = !hasOutlines;
+    if (opt.value.startsWith("stl-")) opt.disabled = !hasOutlines || (opt.value === "stl-assembly" && !assembled);
   }
-  if (!hasOutlines && exportFormatSelect.value.startsWith("stl-")) {
+  if (exportFormatSelect.selectedOptions[0]?.disabled) {
     exportFormatSelect.value = "svg";
   }
   syncExportPartSelection(prevIdx);
@@ -789,7 +787,9 @@ async function exportStl(format: string) {
   };
   if (format === "stl-assembly") {
     const hidden = new Set(lastParts.flatMap((p, i) => (hiddenKeys.has(keys[i]) ? [p.part] : [])));
-    stl(assemblyStl(parts, thickness, hidden), "assembly");
+    const data = assemblyStl(parts, thickness, hidden);
+    if (!data) throw new Error("STL (3D assembly): no part is shown in 3D. Show some in the parts list.");
+    stl(data, "assembly");
   } else if (format === "stl-zip") {
     const zip = partsZip(parts, names, thickness);
     if (zip) downloadBlob(zip, `${current}-parts.zip`);

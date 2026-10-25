@@ -24,7 +24,7 @@ interface PathState {
 }
 
 /** Maps local (x, z) to the bent position. */
-class BendPath {
+export class BendPath {
   private arcs: Arc[];
   /** Path state at the start and at the end of each arc. */
   private states: { start: PathState; end: PathState }[] = [];
@@ -95,7 +95,7 @@ function along(s: PathState, k: number, stretch: number, l: number): PathState {
 type V3 = [number, number, number];
 
 /** Clips a convex polygon to lo <= x <= hi. */
-function clipX(poly: V3[], lo: number, hi: number): V3[] {
+export function clipX(poly: V3[], lo: number, hi: number): V3[] {
   const half = (pts: V3[], keep: (p: V3) => number): V3[] => {
     const out: V3[] = [];
     for (let i = 0; i < pts.length; i++) {
@@ -104,7 +104,8 @@ function clipX(poly: V3[], lo: number, hi: number): V3[] {
       const da = keep(a);
       const db = keep(b);
       if (da >= 0) out.push(a);
-      if (da >= 0 !== db >= 0) {
+      // Strict crossing only: a vertex on the plane is kept once, not doubled.
+      if ((da > 0 && db < 0) || (da < 0 && db > 0)) {
         const t = da / (da - db);
         out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
       }

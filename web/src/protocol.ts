@@ -170,6 +170,7 @@ export type FromWorker =
       svg: string;
       parts: RecordedPart[];
       assembly: AssemblyStatus;
+      warnings: string[];
       dims: Dimension[];
       handles: Handle[];
       lines: GridLine[];

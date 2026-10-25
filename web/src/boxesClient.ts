@@ -22,6 +22,8 @@ export interface RenderResult {
   svg: string;
   parts: RecordedPart[];
   assembly: AssemblyStatus;
+  /** Problems with the 3D view that do not stop it (e.g. a bad ramp value). */
+  warnings: string[];
   dims: Dimension[];
   handles: Handle[];
   lines: GridLine[];
