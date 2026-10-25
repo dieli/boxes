@@ -160,3 +160,47 @@ def test_composite_edges_list_their_pieces():
     for ps in pieces:
         for a, b in zip(ps, ps[1:]):
             assert b["start"] >= a["start"] + a["length"] - 1e-9
+
+
+# --- TrayLayout editor handles ----------------------------------------------------------
+
+# Back and left liners (0 mm row and column) with the outer back wall behind the first real
+# column taken out.
+_LINER_GAP = """ ,> 0mm
+ | ,> 50mm
+ | | ,> 40mm
++-+ +-+
+| | | |  0mm
++-+-+-+
+| | | |  60mm
++-+-+-+
+| | | |  30mm
++-+-+-+
+"""
+
+
+def test_traylayout_handles_follow_the_layout_text():
+    r = render("TrayLayout", layout=_LINER_GAP)
+    hw = {(h["i"], h["j"]): h["on"] for h in r["handles"] if h["kind"] == "hwall"}
+    # The outer wall's toggle shows the outer wall, not "outer or liner".
+    assert hw[(1, 0)] is False
+    assert hw[(2, 0)] is True
+    # The liner's toggle on the next line.
+    assert hw[(1, 1)] is True
+
+
+def test_traylayout_no_dims_or_lines_for_0mm_rows_and_columns():
+    r = render("TrayLayout", layout=_LINER_GAP)
+    assert all(d["value"] != 0 for d in r["dims"])
+    # Columns 0, 50, 40 and rows 0, 60, 30: only the line between the two real ones moves.
+    assert [ln["index"] for ln in r["lines"] if ln["axis"] == "x"] == [1]
+    assert [ln["index"] for ln in r["lines"] if ln["axis"] == "y"] == [1]
+
+
+def test_extra_parts_are_closed_and_sized_by_span():
+    from assembly import Assembly
+    a = Assembly(SimpleNamespace(thickness=3.0), [])
+    p = a.extra("ramp", [(5.0, 2.0), (25.0, 2.0), (5.0, 12.0)])
+    outer = p.rec["outline"]["outer"]
+    assert outer[0] == outer[-1]
+    assert (p.rec["x"], p.rec["y"]) == (20.0, 10.0)

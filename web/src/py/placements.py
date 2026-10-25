@@ -1665,16 +1665,17 @@ def _tray_layout(a: Assembly, editable: bool) -> None:
         oys[j] = oys[j + 1] + t + lsy[j]
     f.walls("layout", "x", oxs[1:-1], given.x, lsx, b.hi, label="x", axis="x")
     f.walls("layout", "-y", oys[1:-1], given.y, lsy, b.hi, label="y", axis="y")
-    # Editable in 3D: every wall piece of the grid and every floor cell.
+    # Editable in 3D: every wall piece of the grid and every floor cell. On/off as in the layout
+    # text (the toggle flips that): next to a liner the built outer wall is outer or liner.
     sliding = getattr(getattr(b, "lidSettings", None), "style", None) == "sliding"
     for j in range(ly + 1):
         h = (b.h + t if sliding else b.h) if j == 0 else ((b.h - t if sliding else b.h) if j == ly else b.hi)
         for i in range(lx):
-            a.handle("hwall", ci(i), yl(j), b.hwalls[j][i], (xs[i] + t, ys[j], 0.0), (xs[i + 1], ys[j] + t, h))
+            a.handle("hwall", ci(i), yl(j), given.hwalls[yl(j)][ci(i)], (xs[i] + t, ys[j], 0.0), (xs[i + 1], ys[j] + t, h))
     for j in range(ly):
         for i in range(lx + 1):
             h = b.h if i in (0, lx) else b.hi
-            a.handle("vwall", xl(i), ri(j), b.vwalls[j][i], (xs[i], ys[j + 1] + t, 0.0), (xs[i] + t, ys[j], h))
+            a.handle("vwall", xl(i), ri(j), given.vwalls[ri(j)][xl(i)], (xs[i], ys[j + 1] + t, 0.0), (xs[i] + t, ys[j], h))
         for i in range(lx):
             a.handle("floor", ci(i), ri(j), b.floors[j][i], (xs[i] + t, ys[j + 1] + t, -t), (xs[i + 1], ys[j], 0.0))
     # Liner pieces, as written in the layout (on the line next to the outer one).

@@ -157,8 +157,12 @@ class Assembly:
     def extra(self, label: str, outline: list[tuple[float, float]]) -> Part:
         """A part that is not in the 2D sheet (e.g. a 3D printed insert) with the given outline
         in local coordinates. Place it like any other part; give the extrusion as thickness."""
+        outline = [(float(p[0]), float(p[1])) for p in outline]
+        if outline and outline[0] != outline[-1]:
+            outline.append(outline[0])
+        xs, ys = [p[0] for p in outline], [p[1] for p in outline]
         rec = {"part": -1 - len(self.extras), "helper": "printed",
-               "x": max(p[0] for p in outline), "y": max(p[1] for p in outline),
+               "x": max(xs) - min(xs), "y": max(ys) - min(ys),
                "edges": [], "label": label, "move": "", "matrix": [0.0] * 6, "mirrored": False,
                "callers": [], "outline": {"outer": [list(p) for p in outline], "holes": []}}
         part = Part(len(self.parts) + len(self.extras), rec)
@@ -352,13 +356,16 @@ class BoxFrame:
         }[side]
         value = self.asm.arg(arg) if sizes is None else sizes
         is_list = isinstance(value, list)
-        sizes = [float(v) for v in value] if is_list else [float(value)]
-        if sum(sizes) + t * (len(sizes) - 1) > inner + 1e-6:
+        values = [float(v) for v in value] if is_list else [float(value)]
+        if sum(values) + t * (len(values) - 1) > inner + 1e-6:
             t = 0.0
-        pos = (inner - sum(sizes) - t * (len(sizes) - 1)) / 2
-        for k, size in enumerate(sizes):
+        pos = (inner - sum(values) - t * (len(values) - 1)) / 2
+        for k, size in enumerate(values):
+            if size == 0 and is_list:  # e.g. a TrayLayout liner row: nothing to measure
+                pos += t
+                continue
             self.asm.dim(arg, add(start, d, pos), add(start, d, pos + size), out,
-                         k if is_list else None, sizes if sizes is not None and is_list else None,
+                         k if is_list else None, values if is_list else None,
                          f"{label}[{k + 1}]" if label and is_list else label, axis)
             pos += size + t
 
@@ -367,10 +374,13 @@ class BoxFrame:
               axis: str | None = None) -> None:
         """Draggable inner walls h high: starts[k] is where the wall between compartments k and
         k + 1 begins, along x (side "x", left to right) or y (side "-y", compartments back to
-        front). given: the parameter's sizes, actual: the sizes as built ("outside" scales them)."""
+        front). given: the parameter's sizes, actual: the sizes as built ("outside" scales them).
+        No line next to a compartment of size 0 (a TrayLayout liner: its wall stays put)."""
         t = self.asm.t
         scale = sum(given) / sum(actual) if sum(actual) else 1.0
         for k, s in enumerate(starts):
+            if given[k] == 0 or given[k + 1] == 0:
+                continue
             if side == "x":
                 lo, hi, d = self.at(s, 0, 0), self.at(s + t, self.y, h), X
             else:
