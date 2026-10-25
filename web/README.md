@@ -2,6 +2,9 @@
 
 Runs Boxes.py fully in the browser via [Pyodide](https://pyodide.org/) with a live SVG preview.
 
+Experimental and largely written with AI assistants; see [How this was made](#how-this-was-made)
+and [Testing](#testing).
+
 ## Run
 
 Needs Node 20+ and [uv](https://docs.astral.sh/uv/) (or Python with `pip`) to build the wheel.
@@ -202,3 +205,59 @@ wrong side out. Run it from the repo root after changing a placement:
 
     uv run --no-project --with affine --with shapely --with qrcode --with typing_extensions \
         --with numpy python web/scripts/check_assembly.py [Generator ...]
+
+### Browser tests
+
+`tests/e2e` drives the built app in Microsoft Edge (or Chrome: `BROWSER_CHANNEL=chrome`) through
+`playwright-core`, using the installed browser. Build, start the preview server, then run them:
+
+    npm run build
+    npm run preview          # in a second terminal, serves http://localhost:4173/
+    npm run test:e2e         # BASE_URL=... for another server
+
+They cover the exports (SVG, per-part SVG zip, STL assembly/zip/single part), the card ramps and
+TrayLayout liners (from the URL and from the 3D editor), and fail on any console error.
+
+## How this was made
+
+This fork was largely "vibe coded": most of the code in `web/` and the TrayLayout changes in
+`boxes/generators/traylayout.py` were written by AI assistants, Claude Code (Claude Opus) and
+Google Gemini, under my direction. I set the goals and the design, decided between the
+options the assistants offered, and tested the results in the browser and in cutting software.
+I did not write most of the code by hand.
+
+To make up for that:
+
+- The code is reviewed by two independent AI reviewers (Claude and Gemini) with the same brief,
+  covering correctness, safety, performance, readability, coding style, maintainability, error
+  handling, tests, accessibility and licensing ([docs/review/REVIEW_BRIEF.md](docs/review/REVIEW_BRIEF.md)).
+  Every finding is checked against the code before it is fixed, and the findings and decisions
+  are kept in `docs/review/`. *Status: review not run yet.*
+- Changes are covered by automated checks (below) and were tested by hand.
+- Core changes are kept small so they can be offered upstream, where they would get a human
+  review.
+
+Treat it as experimental. Check the parts in the 2D view and the 3D assembly before cutting
+expensive material, and report problems in this fork, not to upstream Boxes.py.
+
+The steps still open before publishing are in [docs/PUBLISHING_PLAN.md](docs/PUBLISHING_PLAN.md).
+
+## Testing
+
+What has been tested so far:
+
+| What | How | Result |
+|---|---|---|
+| Upstream generators still draw the same | `pytest tests` (upstream's tests, including reference SVGs) | 206 passed, 9 skipped; TrayLayout reference SVGs unchanged |
+| 3D assemblies fit together | `scripts/check_assembly.py`: 470 cases over all placed generators; finger joints filled and not overlapping, finger holes filled, no parts cutting into each other | all pass |
+| TrayLayout | in the assembly checker and the browser: fingerholes, sliding lid with and without magnets, liners on each of the four sides and combined, card ramps on each side, `outside` on and off, missing floors and walls | all pass |
+| Web app | browser tests (`tests/e2e`): exports, card ramps, liners | all pass |
+| Cutting software | per-part SVG zip imported into Creality Falcon Design Space | imports correctly |
+
+Not tested yet:
+
+- No part of this fork has been laser cut or 3D printed yet: not the liners, the sliding lid or
+  the card ramps.
+- LightBurn import, browsers other than Edge, phone-sized screens.
+- No automated tests for the TrayLayout core changes in upstream's `tests/` yet, and no CI for
+  `web/`.
