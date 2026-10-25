@@ -628,13 +628,49 @@ def _outline(part, to_local: Affine, probe=None, min_area: float = 0.0,
         if not around and abs(_area(outer)) < min_area:
             return None  # only holes: the part's outline was drawn elsewhere
         outer_bbox = _poly_bbox(outer)
+        holes = [r for r in rings
+                 if r is not outer and abs(_area(r)) >= _MIN_HOLE_AREA
+                 and _in_bbox(*r[0], outer_bbox) and _inside(*r[0], outer)]
         return {
             "outer": [list(p) for p in outer],
-            "holes": [[list(p) for p in r] for r in rings
-                      if r is not outer and abs(_area(r)) >= _MIN_HOLE_AREA
-                      and _in_bbox(*r[0], outer_bbox) and _inside(*r[0], outer)],
+            "holes": [[list(p) for p in r] for r in _merge_overlapping(holes)],
         }
     return _outline_shapely(lines, probe, min_area)
+
+
+def _merge_overlapping(holes: list) -> list:
+    """Holes that overlap (e.g. KeyHolder's mounting keyhole and a hook's finger hole) as one
+    hole each: overlapping holes make an invalid polygon, whose overlap counts as material in
+    Three.js and the STL. Only holes whose bounding bbox overlap are joined (sweep over x)."""
+    order = sorted(range(len(holes)), key=lambda i: _poly_bbox(holes[i])[0])
+    bbox = {i: _poly_bbox(holes[i]) for i in order}
+    groups: list[list[int]] = []
+    active: list[tuple[float, list[int]]] = []  # (max x of the group, group)
+    for i in order:
+        x0, y0, x1, y1 = bbox[i]
+        active = [(ax, g) for ax, g in active if ax > x0]
+        hit = [g for _, g in active if any(bbox[j][1] < y1 and y0 < bbox[j][3]
+                                           and bbox[j][0] < x1 for j in g)]
+        if not hit:
+            groups.append([i])
+            active.append((x1, groups[-1]))
+            continue
+        # Join every group this hole touches into the first one.
+        first = hit[0]
+        for g in hit[1:]:
+            first.extend(g)
+            g.clear()
+        first.append(i)
+        active = [(max(ax, x1) if g is first else ax, g) for ax, g in active if g]
+    out = []
+    for g in groups:
+        if len(g) <= 1:
+            out.extend(holes[j] for j in g)
+            continue
+        union = unary_union([Polygon(holes[j]).buffer(0) for j in g])
+        for poly in getattr(union, "geoms", [union]):
+            out.append(list(poly.exterior.coords[:-1]))
+    return out
 
 
 _CLOSE_GAP = 0.5  # mm
