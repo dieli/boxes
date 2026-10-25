@@ -187,7 +187,10 @@ verifying 3D placements for new generators.
 - TrayLayout has TypeTray's `fingerholes` option (and the `FingerHoleEdge` settings): a notch per
   compartment in the walls along x, outer front/back walls optional. This is a change in
   `boxes/generators/traylayout.py` (default `none` draws the same as before), so it carries over
-  when converting a TypeTray.
+  when converting a TypeTray. TrayLayout's notches are 20 mm deep in every wall
+  (`FingerHoleEdge_absolute_depth=20`, `relative_depth=0`), whatever its height; TypeTray keeps
+  upstream's 0.9 of the wall height. A notch always leaves a thickness of wall below it (a tenth
+  of the wall, if that is less), so a deep setting cannot cut a low wall in two.
 - TrayLayout also has a `sliding` lid style (`TrayLid` in `boxes/generators/traylayout.py`, not
   offered by other generators): the front wall is one thickness lower and the back wall one higher,
   so a two-layer lid slides in from the front over the lowered wall; the lower layer's tab locks
@@ -233,8 +236,8 @@ verifying 3D placements for new generators.
 - `hi` (inner wall height, 0 = same as `h`) has its own dimension on the first inner wall
   (TypeTray, TrayLayout), e.g. for low inserts under a rulebook. With a flat lid, its lower layer
   sits one thickness inside the box: keep `hi` at most `h - thickness`, otherwise the 3D view
-  rests the lid on the inner walls and it does not close flush. With `hi > h`, TrayLayout notches
-  each wall by its own height; TypeTray (upstream) still notches the outer walls by `hi`.
+  rests the lid on the inner walls and it does not close flush. With `hi > h`, TrayLayout caps
+  each wall's notch by its own height; TypeTray (upstream) still notches the outer walls by `hi`.
 - Dimension labels that would overlap on screen (narrow compartments) are moved down a row.
 
 ## How this was made
@@ -270,7 +273,7 @@ own `tests/`, which upstream's workflow runs. Commands are for the repo root unl
 | Unit tests (Vitest, 62) | `layout.ts` (parse, toggle, split, merge, sizes), `zip.ts` (and part names), `bend.ts`, `stl.ts`, the SVG sanitizer, select fallback, the worker client (timeouts per running request, crashes, restarts and failed restarts, latest-wins renders) | `web/`: `npm test` |
 | Typecheck | all of `web/src` | `web/`: `npm run typecheck` (also part of `npm run build`) |
 | Bridge tests (pytest, 30) | `boxes_bridge.py` and the placements: path joining, pieces, `ignore_widths`, composite edge pieces, ramp validation and warnings, argument filtering (option names, non-finite numbers), print clearance, TrayLayout handles, extra parts | `uv run --no-project --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest python -m pytest web/tests/py -q` |
-| Core tests (pytest) | upstream's tests and reference SVGs, plus this fork's `tests/test_traylayout_options.py` (25: notch depth per wall, outer walls per `fingerholes`, liners, size errors, the sliding lid (walls, layers, back wall gaps, handles, magnets, low walls), the lid class hook), `tests/test_typetray.py` (2: `back_height`) and `tests/test_part_counts.py` (11: SpicesRack supports, WineRack walls) | same, plus `--with lxml --with markdown --with setuptools --with pyyaml`, on `tests` (244 passed, 9 skipped). The three fork test files also run in `web.yml` |
+| Core tests (pytest) | upstream's tests and reference SVGs, plus this fork's `tests/test_traylayout_options.py` (27: notch depth per wall, outer walls per `fingerholes`, liners, size errors, the sliding lid (walls, layers, back wall gaps, handles, magnets, low walls), the lid class hook), `tests/test_typetray.py` (2: `back_height`) and `tests/test_part_counts.py` (11: SpicesRack supports, WineRack walls) | same, plus `--with lxml --with markdown --with setuptools --with pyyaml`, on `tests` (248 passed, 9 skipped). The three fork test files also run in `web.yml` |
 | Assembly checker | `scripts/check_assembly.py`, see below: all placed generators, defaults plus extra cases | see below (about 10 min) |
 | Browser tests (21) | the built app in Edge or Chrome, see below | `web/`: `npm run test:e2e` |
 

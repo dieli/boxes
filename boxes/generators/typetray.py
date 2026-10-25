@@ -49,7 +49,10 @@ class FingerHoleEdge(edges.BaseEdge):
     def __call__(self, length, **kw):
 
         width = min(self.settings.absolute_width + length * self.settings.relative_width, length)
-        depth = min(self.settings.absolute_depth + self.settings.wallheight * self.settings.relative_depth, self.settings.wallheight)
+        wall = self.settings.wallheight
+        # Leave some wall below the hole: a thickness, or a tenth of the wall if that is less.
+        depth = min(self.settings.absolute_depth + wall * self.settings.relative_depth,
+                    wall - min(self.thickness, 0.1 * wall))
 
         r = min(width/2, depth, self.settings.radius)
 

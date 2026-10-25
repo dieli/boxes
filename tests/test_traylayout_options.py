@@ -126,6 +126,31 @@ def test_notch_depth_follows_each_wall():
         assert w["notch"] == w["y"], w
 
 
+def notch(box, wallheight: float, length: float = 50.0) -> float:
+    """Depth of the finger hole notch box.edges["A"] draws in a wall this high."""
+    edge = box.edges["A"]
+    edge.settings.wallheight = wallheight
+    drawn = []
+    edge.polyline = lambda *p: drawn.append(p)
+    edge(length)
+    del edge.polyline
+    if not drawn:
+        return 0.0
+    _, _, straight, (_, r), *_ = drawn[0]
+    return straight + r
+
+
+def test_notches_are_as_deep_in_every_wall():
+    box, _ = build("--h=50", "--fingerholes=front-and-back", "--layout=" + grid([50], [50]))
+    assert notch(box, 50) == notch(box, 30) == 20
+
+
+def test_notches_leave_some_wall():
+    box, _ = build("--h=50", "--FingerHoleEdge_absolute_depth=100", "--layout=" + grid([50], [50]))
+    assert notch(box, 50) == pytest.approx(50 - box.thickness)
+    assert notch(box, 20) == pytest.approx(18)  # a tenth of a wall lower than ten thicknesses
+
+
 @pytest.mark.parametrize("fingerholes, outer", [("none", 0), ("inside-only", 0), ("front", 1), ("back", 1),
                                                 ("front-and-back", 2)])
 def test_outer_walls_get_notches_as_chosen(fingerholes, outer):

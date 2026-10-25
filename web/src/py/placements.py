@@ -297,7 +297,8 @@ def _notch_depth(box, wallheight: float) -> float:
     s = getattr(getattr(box, "edges", {}).get("A"), "settings", None)
     if s is None or wallheight <= 0:
         return 0.0
-    return min(s.absolute_depth + wallheight * s.relative_depth, wallheight)
+    return min(s.absolute_depth + wallheight * s.relative_depth,
+               wallheight - min(box.thickness, 0.1 * wallheight))
 
 
 def _ramp_limit(box, h: float) -> float:

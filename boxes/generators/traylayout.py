@@ -228,7 +228,8 @@ You can replace the space characters representing the floor by a "X" to remove t
         self.addSettingsArgs(boxes.edges.FingerJointSettings)
         self.addSettingsArgs(TrayLidSettings, prefix="Lid")
         self.buildArgParser("h", "hi", "outside", "sx", "sy")
-        self.addSettingsArgs(FingerHoleEdgeSettings)
+        # Notches as deep in every wall, whatever its height
+        self.addSettingsArgs(FingerHoleEdgeSettings, absolute_depth=20.0, relative_depth=0.0)
         self.argparser.add_argument(
             "--fingerholes", action="store", type=str, default="none",
             choices=["none", "inside-only", "front", "back", "front-and-back"],
