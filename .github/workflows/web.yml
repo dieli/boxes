@@ -48,3 +48,30 @@ jobs:
           npm run preview -- --strictPort &
           for i in $(seq 1 30); do curl -sf http://localhost:4173/ >/dev/null && break; sleep 1; done
           npm run test:e2e
+      - name: Upload the app for GitHub Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/live-preview'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist/
+
+  # The app on GitHub Pages (https://<owner>.github.io/<repo>/), after all tests passed.
+  # Repo settings: Pages source "GitHub Actions"; the github-pages environment must allow
+  # live-preview (or make it the default branch). Upstream's pages.yml deploys the documentation
+  # to the same site on pushes to master: leave master alone or disable that workflow in the fork.
+  deploy:
+    needs: web
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/live-preview'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
