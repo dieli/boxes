@@ -27,7 +27,7 @@ Values:
  * radius : 10.0 : maximal radius (in mm)
  * absolute_depth : 0.0 : depth of the hole in mm (in addition to the relative)
  * absolute_width : 0.0 : width of the hole in mm (in addition to the relative)
- * relative_depth : 0.0 : depth of the hole as fraction of the wall
+ * relative_depth : 0.9 : depth of the hole as fraction of the wall
  * relative_width : 0.3 : width of the hole as fraction of the wall width
 
 """
