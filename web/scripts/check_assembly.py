@@ -450,7 +450,9 @@ def check(name: str, args: dict) -> list[str]:
     if unplaced:
         problems.append(f"unplaced (2D only): {', '.join(unplaced)}")
     solids = [Solid(p, t) for p in r["parts"] if p["place"] and p["outline"]]
-    for a in solids:
+    # Coarse body check: fraction of a's area inside b, for every ordered pair (a, b).
+    cut: dict[tuple[int, int], float] = {}
+    for ia, a in enumerate(solids):
         others = [b for b in solids if b is not a]
 
         def hit(w):
@@ -495,10 +497,19 @@ def check(name: str, args: dict) -> list[str]:
         gx, gy = gx.ravel(), gy.ravel()
         keep = contains_xy(a.poly, gx, gy)
         w = a.world(gx[keep], gy[keep], np.full(keep.sum(), a.t / 2))
-        for b in others:
-            frac = b.contains(w).mean() if len(w) else 0.0
-            if frac > 0.01 and a.name <= b.name:
-                problems.append(f"{a.name} cuts into {b.name}: {frac:.0%} of its area")
+        for ib, b in enumerate(solids):
+            if b is not a:
+                cut[ia, ib] = b.contains(w).mean() if len(w) else 0.0
+    # Each pair once (by name), but checked both ways: a small part inside a large one covers
+    # little of the large one's area.
+    for (ia, ib), frac in cut.items():
+        a, b = solids[ia], solids[ib]
+        if a.name > b.name:
+            continue
+        if frac > 0.01:
+            problems.append(f"{a.name} cuts into {b.name}: {frac:.0%} of its area")
+        elif a.name != b.name and cut[ib, ia] > 0.01:
+            problems.append(f"{b.name} cuts into {a.name}: {cut[ib, ia]:.0%} of its area")
     return problems
 
 
