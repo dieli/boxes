@@ -28,7 +28,7 @@ from argparse import ArgumentParser
 from contextlib import contextmanager
 from functools import wraps
 from shlex import quote
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
 from xml.sax.saxutils import quoteattr
 
@@ -37,6 +37,9 @@ import qrcode
 from boxes.drawing import Context
 from shapely.geometry import *
 from shapely.ops import split
+
+if TYPE_CHECKING:
+    from boxes import lids
 
 from boxes import edges, formats, gears, parts, pulley
 from boxes.Color import Color, RGB
@@ -348,8 +351,8 @@ class Boxes:
     # Lid classes for self.lidSettings / self.lid; a generator can set subclasses, e.g. with
     # more lid styles (add them with addSettingsArgs(<settings class>, prefix="Lid")).
     # None: lids.LidSettings and lids.Lid.
-    lid_settings_class: type | None = None
-    lid_class: type | None = None
+    lid_settings_class: type[lids.LidSettings] | None = None
+    lid_class: type[lids.Lid] | None = None
 
     def __init__(self) -> None:
         self.formats = formats.Formats()

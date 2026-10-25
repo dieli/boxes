@@ -24,6 +24,8 @@ from boxes.generators.typetray import FingerHoleEdge, FingerHoleEdgeSettings
 
 
 class TrayLidSettings(lids.LidSettings):
+    # The docstring is lids.LidSettings' plus the sliding style and the magnets: the server UI
+    # shows it as the settings' help, so keep it in step with the core one.
     """Settings for the Lid
 Values:
 
