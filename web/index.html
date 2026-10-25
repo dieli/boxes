@@ -10,7 +10,7 @@
     <aside id="sidebar">
       <header>
         <h1>Boxes.py <span>Live</span></h1>
-        <p id="status">Starting…</p>
+        <p id="status" role="status">Starting…</p>
       </header>
       <label class="picker">
         Generator
@@ -56,7 +56,7 @@
         <span id="sheet-size" title="2D sheet bounding box"></span>
         <span id="timing"></span>
       </div>
-      <div id="error" hidden></div>
+      <div id="error" role="alert" hidden></div>
       <div id="views">
         <div id="preview"></div>
         <section id="panel3d">
@@ -83,7 +83,7 @@
             </div>
             <ul id="parts-list"></ul>
           </details>
-          <p id="assembly-error" hidden></p>
+          <p id="assembly-error" role="status" hidden></p>
           <p id="flat-note" hidden></p>
           <p id="edit-hint" hidden></p>
           <div id="no3d" hidden>

@@ -104,7 +104,9 @@ export class ParamForm {
     row.append(label, el);
     if (arg.help) {
       const help = document.createElement("small");
+      help.id = `${id}-help`;
       help.textContent = stripMarkdown(arg.help);
+      el.setAttribute("aria-describedby", help.id); // read with the field
       row.append(help);
     }
     return row;

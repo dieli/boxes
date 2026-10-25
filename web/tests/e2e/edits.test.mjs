@@ -1,4 +1,4 @@
-// Edits that meet the 150 ms debounce: undo, switching generator, download after a failed render.
+// Edits that meet the 150 ms debounce (undo, switching generator, download after a failed render), and accessibility.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { assertClean, openPage, load, rerender } from "./helpers.mjs";
@@ -52,4 +52,12 @@ test("no download while the preview shows an error", async () => {
   assert.ok(await page.$eval("#download", (b) => !b.disabled), "download enabled again");
   // Not assertClean: the bad value's traceback is logged to the console on purpose.
   assert.ok(await page.$eval("#error", (e) => e.hidden), "error gone");
+});
+
+test("help texts are linked to their fields, errors are announced", async () => {
+  await load(page, "#ABox");
+  const help = await page.$eval("#arg-x", (el) => document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent ?? "");
+  assert.ok(help.length > 0, "#arg-x has a linked help text");
+  assert.equal(await page.getAttribute("#error", "role"), "alert");
+  assert.equal(await page.getAttribute("#status", "role"), "status");
 });
