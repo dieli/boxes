@@ -23,6 +23,57 @@ from boxes import lids
 from boxes.generators.typetray import FingerHoleEdge, FingerHoleEdgeSettings
 
 
+_MAGNET_DOC = " * magnet_diameter : 0.0 : diameter of magnet holes in mm (sliding lid only; 0 to disable)\n"
+
+
+class TrayLidSettings(lids.LidSettings):
+    __doc__ = (lids.LidSettings.__doc__ or "") if "magnet_diameter" in (lids.LidSettings.__doc__ or "") else \
+        (lids.LidSettings.__doc__ or "").replace("\n* relative", _MAGNET_DOC + "\n* relative", 1)
+
+    absolute_params = {
+        **lids.LidSettings.absolute_params,
+        "style": tuple(dict.fromkeys(lids.LidSettings.absolute_params["style"] + ("sliding",))),
+        "magnet_diameter": 0.0,
+    }
+
+
+class TrayLid(lids.Lid):
+    """Lid with an additional "sliding" style that only works with TrayLayout:
+    the back wall is lowered by one thickness so a two layer lid can slide in
+    over it; the lower layer locks into finger holes in the raised front wall."""
+
+    def __call__(self, x: float, y: float, edge=None) -> bool:
+        if self.settings.style != "sliding":
+            return super().__call__(x, y, edge)
+        t = self.thickness
+        bs = self.brim_spacing
+        md = self.magnet_diameter
+        w_bot = x - bs * 2
+        l_bot = y + t - bs
+
+        def bottomCB() -> None:
+            self.handleCB(w_bot, l_bot)()
+            if md > 0 and w_bot > 2 * md:
+                m = max(md, 1.5 * t)
+                self.hole(m, m, d=md)
+                self.hole(w_bot - m, m, d=md)
+
+        def topCB() -> None:
+            if self.handle != "none":
+                self.handleCB(x, y - bs)()
+            else:
+                grip_w = min(x * 0.35, 30.0)
+                if grip_w > 2 * t and y > 4 * t:
+                    self.rectangularHole(x / 2, 2 * t, grip_w, t, r=t / 2)
+
+        self.rectangularWall(w_bot, l_bot, "eefe", callback=[bottomCB],
+                             move="up", label="lid bottom")
+        self.rectangularWall(x, y - bs, "EEeE", callback=[topCB],
+                             move="up", label="lid top")
+        self.handleParts(x, y)
+        return True
+
+
 class TrayLayoutFile(Boxes):
     """Generate a layout file for a typetray."""
     # This class generates the skeleton text file that can then be edited
@@ -104,7 +155,7 @@ You can replace the space characters representing the floor by a "X" to remove t
     def __init__(self) -> None:
         super().__init__()
         self.addSettingsArgs(boxes.edges.FingerJointSettings)
-        self.addSettingsArgs(lids.LidSettings)
+        self.addSettingsArgs(TrayLidSettings, prefix="Lid")
         self.buildArgParser("h", "hi", "outside", "sx", "sy")
         self.addSettingsArgs(FingerHoleEdgeSettings)
         self.argparser.add_argument(
@@ -119,6 +170,8 @@ You can replace the space characters representing the floor by a "X" to remove t
 with a space character to remove the walls.
 * You can replace the space characters representing the floor by a "X"
 to remove the floor for this compartment.
+* A size of 0mm for the first or last row or column makes the next wall
+a liner glued to the outer wall (no finger joints).
 * Resize text area if necessary.""")
         self.description = ""
         if self.UI != "web":
@@ -189,15 +242,22 @@ to remove the floor for this compartment.
         else:
             raise RuntimeError("traylayout requires --layout, --input, or implementation of generate_layout")
 
+        sliding = self.lidSettings.style == "sliding"
         if self.outside:
             self.x = self.adjustSize(self.x)
             self.y = self.adjustSize(self.y)
             self.h = self.adjustSize(self.h, e2=False)
+            if sliding:
+                self.h -= self.thickness
 
             if self.hi:
                 self.hi = self.adjustSize(self.hi, e2=False)
 
-        self.hi = self.hi or self.h
+        self.removeZeroSizes()
+        if sliding:
+            self.hi = min(self.hi, self.h - self.thickness) if self.hi else self.h - self.thickness
+        else:
+            self.hi = self.hi or self.h
         self.edges["s"] = boxes.edges.Slot(self, self.hi / 2.0)
         self.edges["C"] = boxes.edges.CrossingFingerHoleEdge(self, self.hi)
         self.edges["D"] = boxes.edges.CrossingFingerHoleEdge(self, self.hi, outset=self.thickness)
@@ -205,6 +265,164 @@ to remove the floor for this compartment.
                 **self.edgesettings.get("FingerHoleEdge", {}))
         s.wallheight = 0 if self.fingerholes == "none" else self.hi
         self.addPart(FingerHoleEdge(self, s))
+
+    def removeZeroSizes(self) -> None:
+        """Rows and columns of size 0 at the edge of the layout: the wall next to the outer
+        wall becomes a liner, a plain plate glued to the outer wall (no finger joints, no holes
+        in floor or side walls). They are taken out of the grid; the neighbouring row or column
+        grows by the liner's thickness (the liner stands in it, see liners()).
+
+        Sets self.liner: per side ("back", "front": per column; "left", "right": per row) where
+        a liner stands, self.liner_pieces (drawn by liners()) and self.zero_sizes (removed
+        (first, last) row or column per axis) for colIndex() etc."""
+        t = self.thickness
+        x, y = list(self.x), list(self.y)
+        lx, ly = len(x), len(y)
+        self.layout_x, self.layout_y = x, y
+        for name, sizes in (("column", x), ("row", y)):
+            if any(s == 0 for s in sizes[1:-1]):
+                raise ValueError(f"Only the first and the last {name} can have a size of 0 (a liner)")
+            if sum(1 for s in sizes if s > 0) == 0:
+                raise ValueError(f"Need at least one {name} larger than 0")
+        first_x, last_x = x[0] == 0, lx > 1 and x[-1] == 0
+        first_y, last_y = y[0] == 0, ly > 1 and y[-1] == 0
+        self.zero_sizes = {"x": (int(first_x), int(last_x)), "y": (int(first_y), int(last_y))}
+        hw = [list(row[:lx]) for row in self.hwalls]
+        vw = [list(row[:lx + 1]) for row in self.vwalls]
+        fl = [list(row[:lx]) for row in self.floors[:ly]]
+        cols = range(int(first_x), lx - int(last_x))
+        rows = range(int(first_y), ly - int(last_y))
+        # Where a liner stands: both walls there and floor in front of it (original indices).
+        self.liner = {
+            "back": [first_y and hw[0][c] and hw[1][c] and fl[1][c] for c in cols],
+            "front": [last_y and hw[ly][c] and hw[ly - 1][c] and fl[ly - 2][c] for c in cols],
+            "left": [first_x and vw[r][0] and vw[r][1] and fl[r][1] for r in rows],
+            "right": [last_x and vw[r][lx] and vw[r][lx - 1] and fl[r][lx - 2] for r in rows],
+        }
+        if not (first_x or last_x or first_y or last_y):
+            self.liner_pieces = []
+            return
+
+        def lines(n: int, first: bool, last: bool) -> list[tuple[int, int]]:
+            """(line, other) of each remaining grid line: an outer line takes the liner's
+            line where its own wall is missing."""
+            return [(0, 1 if first else 0)] + [(k, k) for k in range(1 + first, n - last)] +                 [(n, n - 1 if last else n)]
+
+        self.hwalls = [[hw[a][c] or hw[b][c] for c in cols] for a, b in lines(ly, first_y, last_y)]
+        self.vwalls = [[vw[r][a] or vw[r][b] for a, b in lines(lx, first_x, last_x)] for r in rows]
+        self.floors = [[fl[r][c] for c in cols] + [False] for r in rows]
+        self.floors.append([False] * (len(cols) + 1))
+        self.x = [x[c] for c in cols]
+        self.y = [y[r] for r in rows]
+        if first_x:
+            self.x[0] += t
+        if last_x:
+            self.x[-1] += t
+        if first_y:
+            self.y[0] += t
+        if last_y:
+            self.y[-1] += t
+        self.liner_pieces = self._linerPieces()
+
+    def _linerPieces(self) -> list[dict]:
+        """Liner plates: runs of liner along each side, split where an inner wall meets it
+        (that wall reaches through to the outer wall). Back and front liners run into the
+        corners; left and right ones are cut short (cut0 at the back, cut1 at the front) where
+        those are taken."""
+        t = self.thickness
+        lx, ly = len(self.x), len(self.y)
+        pieces = []
+        for side, row in (("back", 0), ("front", ly - 1)):
+            flags = self.liner[side]
+            i = 0
+            while i < lx:
+                if not flags[i]:
+                    i += 1
+                    continue
+                e = i + 1
+                while e < lx and flags[e] and not self.vwalls[row][e]:
+                    e += 1
+                pieces.append({"side": side, "start": i, "end": e, "cut0": False, "cut1": False,
+                               "sizes": self.x[i:e]})
+                i = e
+        for side, col in (("left", 0), ("right", lx - 1)):
+            flags = self.liner[side]
+            j = 0
+            while j < ly:
+                if not flags[j]:
+                    j += 1
+                    continue
+                e = j + 1
+                while e < ly and flags[e] and not self.hwalls[e][col]:
+                    e += 1
+                sizes = list(self.y[j:e])
+                cut0 = j == 0 and bool(self.liner["back"][col])
+                cut1 = e == ly and bool(self.liner["front"][col])
+                if cut0:
+                    sizes[0] -= t
+                if cut1:
+                    sizes[-1] -= t
+                pieces.append({"side": side, "start": j, "end": e, "cut0": cut0, "cut1": cut1,
+                               "sizes": sizes})
+                j = e
+        return pieces
+
+    def liners(self) -> None:
+        """The liner plates (see removeZeroSizes()): as high as the inner walls, plain edges,
+        finger holes in the top like the inner walls."""
+        pieces = getattr(self, "liner_pieces", [])
+        if not pieces:
+            return
+        t = self.thickness
+        self.ctx.save()
+        for p in pieces:
+            lengths = []
+            for s in p["sizes"]:
+                lengths += [s, t]
+            lengths.pop()
+            top = "e"
+            if self.fingerholes != "none":
+                top = boxes.edges.CompoundEdge(
+                    self, ["Ae"[i % 2] for i in range(len(lengths))], lengths[::-1])
+            along_x = p["side"] in ("back", "front")
+            line = self.yLineIndex(0 if p["side"] == "back" else len(self.y)) if along_x else \
+                self.xLineIndex(0 if p["side"] == "left" else len(self.x))
+            # The liner stands on the layout line next to the outer one.
+            line += 1 if p["side"] in ("back", "left") else -1
+
+            def label(p=p, line=line, lengths=lengths) -> None:
+                if not self.labels:
+                    return
+                pos = 0.0
+                for k in range(p["start"], p["end"]):
+                    s = lengths[2 * (k - p["start"])]
+                    name = f"x {self.colIndex(k) + 1}/{line + 1}" if along_x else \
+                        f"y {line + 1}/{self.rowIndex(k) + 1}"
+                    self.text(f"liner {name}", pos + s / 2, 0, color=Color.ANNOTATIONS,
+                              align="center", fontsize=2 * t)
+                    pos += s + t
+
+            self.rectangularWall(sum(lengths), self.hi, ["e", "e", top, "e"],
+                                 callback=[label], move="right")
+        self.ctx.restore()
+        self.rectangularWall(10, self.hi, "eeee", move="up only")
+
+    def colIndex(self, i: int) -> int:
+        """Column of the layout text for column i of the grid (see removeZeroSizes())."""
+        return i + getattr(self, "zero_sizes", {"x": (0, 0)})["x"][0]
+
+    def rowIndex(self, j: int) -> int:
+        return j + getattr(self, "zero_sizes", {"y": (0, 0)})["y"][0]
+
+    def xLineIndex(self, i: int) -> int:
+        """Vertical line of the layout text for vertical grid line i (0 = left)."""
+        first, last = getattr(self, "zero_sizes", {"x": (0, 0)})["x"]
+        return 0 if i == 0 else (i + first + last if i == len(self.x) else i + first)
+
+    def yLineIndex(self, j: int) -> int:
+        """Horizontal line of the layout text for horizontal grid line j (0 = back)."""
+        first, last = getattr(self, "zero_sizes", {"y": (0, 0)})["y"]
+        return 0 if j == 0 else (j + first + last if j == len(self.y) else j + first)
 
     def hasFingerHoles(self, y: int) -> bool:
         """Do the walls on horizontal grid line y (0 = back) get finger holes."""
@@ -223,39 +441,45 @@ to remove the floor for this compartment.
         posx = 0
         for pos in range(start, end):
             posx += sx[pos] / 2
-            self.text(f"x {pos+1}/{row+1}" if x else f"y {row+1}/{pos+1}", posx, 0, color=Color.ANNOTATIONS, align="center", fontsize=2*self.thickness)
+            self.text(f"x {self.colIndex(pos)+1}/{self.yLineIndex(row)+1}" if x else
+                      f"y {self.xLineIndex(row)+1}/{self.rowIndex(pos)+1}", posx, 0, color=Color.ANNOTATIONS, align="center", fontsize=2*self.thickness)
             posx += sx[pos] / 2 + self.thickness
 
     def walls(self, move=None):
         lx = len(self.x)
         ly = len(self.y)
+        t = self.thickness
+        sliding = self.lidSettings.style == "sliding"
 
-        le_f = re_f = ole_f = ore_f = "f"
-        le_F = re_F = ole_F = ore_F = "F"
-        if self.hi > self.h:
-            # if hi is bigger limit finger joints at the outside to h
-            le_f = boxes.edges.CompoundEdge(self, "ef", [self.hi-self.h, self.h])
-            re_f = boxes.edges.CompoundEdge(self, "fe", [self.h, self.hi-self.h])
-            le_F = boxes.edges.CompoundEdge(self, "eF", [self.hi-self.h, self.h])
-            re_F = boxes.edges.CompoundEdge(self, "Fe", [self.h, self.hi-self.h])
-        elif self.hi < self.h:
-            # if hi is smaller limit the fingerjoint in the outside walls to hi
-            ole_f = boxes.edges.CompoundEdge(self, "Ef", [self.h-self.hi, self.hi])
-            ore_f = boxes.edges.CompoundEdge(self, "fE", [self.hi, self.h-self.hi])
-            ole_F = boxes.edges.CompoundEdge(self, "EF", [self.h-self.hi, self.hi])
-            ore_F = boxes.edges.CompoundEdge(self, "FE", [self.hi, self.h-self.hi])
+        def hy(y: int) -> float:
+            if y == 0:
+                return self.h + t if sliding else self.h
+            if y == ly:
+                return self.h - t if sliding else self.h
+            return self.hi
+
+        def hx(x: int) -> float:
+            return self.h if x in (0, lx) else self.hi
+
+        def side_edge(h_cur: float, h_other: float, is_outer: bool, ch: str, is_left: bool):
+            if h_cur > h_other:
+                fill = "E" if is_outer else "e"
+                if is_left:
+                    return boxes.edges.CompoundEdge(self, fill + ch, [h_cur - h_other, h_other])
+                return boxes.edges.CompoundEdge(self, ch + fill, [h_other, h_cur - h_other])
+            return ch
 
         self.ctx.save()
 
         # Horizontal Walls
         for y in range(ly + 1):
-            if y == 0 or y == ly:
-                # limit finger holes to h on the outside
-                h = self.h
-                self.edges["C"].height = min(self.h, self.hi)
-                self.edges["D"].height = min(self.h, self.hi)
+            h = hy(y)
+            is_outer = y in (0, ly)
+            if is_outer:
+                # limit finger holes to outer wall height
+                self.edges["C"].height = min(h, self.hi)
+                self.edges["D"].height = min(h, self.hi)
             else:
-                h = self.hi
                 self.edges["C"].height = self.hi
                 self.edges["D"].height = self.hi
 
@@ -291,34 +515,43 @@ to remove the floor for this compartment.
                 # remove last "slot"
                 lengths.pop()
                 edges.pop()
-                le = le_f if start == 0 and y not in (0, ly) else (ole_f if start > 0 and y in (0, ly) else "f")
-                re = re_f if end == lx and y not in (0, ly) else (ore_f if end < lx and y in (0, ly) else "f")
+                le = side_edge(h, hx(start), is_outer, "f", True)
+                re = side_edge(h, hx(end), is_outer, "f", False)
                 top = "e"
                 if self.hasFingerHoles(y):
                     # one finger hole per compartment, none over the crossings
                     top = boxes.edges.CompoundEdge(
                         self, ["Ae"[i % 2] for i in range(len(lengths))], lengths[::-1])
-                self.rectangularWall(sum(lengths), h, [
+
+                wall_len = sum(lengths)
+                bs = self.lidSettings.brim_spacing
+
+                def hwallCB(s=start, e=end, row=y, wl=wall_len) -> None:
+                    self.wallLabelsCB(s, e, row)
+                    if sliding and row == 0 and wl > 2 * bs:
+                        self.fingerHolesAt(bs, self.h - 0.5 * t, wl - 2 * bs, 0)
+
+                self.rectangularWall(wall_len, h, [
                     boxes.edges.CompoundEdge(self, edges, lengths),
                     re if self.vWalls(end, y) else "e",
                     top,
                     le if self.vWalls(start, y) else "e"],
-                                     callback=[lambda: self.wallLabelsCB(start, end, y)],
+                                     callback=[hwallCB],
                                      move="right")
                 start = end
 
         self.ctx.restore()
-        self.rectangularWall(10, max(self.h, self.hi), "ffef", move="up only")
+        self.rectangularWall(10, max(self.h + (t if sliding else 0), self.hi), "ffef", move="up only")
         self.ctx.save()
 
         # Vertical Walls
         for x in range(lx + 1):
-            if x == 0 or x == lx:
-                h = self.h
-                self.edges["C"].height = min(self.h, self.hi)
-                self.edges["D"].height = min(self.h, self.hi)
+            h = hx(x)
+            is_outer = x in (0, lx)
+            if is_outer:
+                self.edges["C"].height = min(h, self.hi)
+                self.edges["D"].height = min(h, self.hi)
             else:
-                h = self.hi
                 self.edges["C"].height = self.hi
                 self.edges["D"].height = self.hi
             start = 0
@@ -360,10 +593,8 @@ to remove the floor for this compartment.
                           "C": "e",
                           "D": "e"}[e] for e in reversed(edges)]
                 edges = ["e" if e == "s" else ("E" if e == "S" else e) for e in edges]
-                les = ["e", le_F, le_f] if start == 0 and x not in (0, lx) else (
-                    ["e", ole_F, ole_f] if start > 0 and x in (0, lx) else "eFf")
-                res = ["e", re_F, re_f] if end == ly and x not in (0, lx) else (
-                    ["e", ore_F, ore_f] if end < ly and x in (0, lx) else "eFf")
+                les = ["e", side_edge(h, hy(start), is_outer, "F", True), side_edge(h, hy(start), is_outer, "f", True)]
+                res = ["e", side_edge(h, hy(end), is_outer, "F", False), side_edge(h, hy(end), is_outer, "f", False)]
                 self.rectangularWall(sum(lengths), h, [
                     boxes.edges.CompoundEdge(self, edges, lengths),
                     res[self.hWalls(x, end)],
@@ -375,6 +606,7 @@ to remove the floor for this compartment.
 
         self.ctx.restore()
         self.rectangularWall(10, max(self.h, self.hi), "ffef", move="up only")
+        self.liners()
 
     def base_plate(self, callback=None, move=None):
         lx = len(self.x)
@@ -408,7 +640,7 @@ to remove the floor for this compartment.
                     e = "e"
                 if self.labels:
                     self.text(
-                        f"x {x+1}/{y+1}",
+                        f"x {self.colIndex(x)+1}/{self.yLineIndex(y)+1}",
                         posx+self.x[x]/2,
                         posy + (t if y > 0 else 0),
                         color=Color.ANNOTATIONS,
@@ -453,7 +685,7 @@ to remove the floor for this compartment.
                     e = "e"
                 if self.labels:
                     self.text(
-                        f"y {x+1}/{y+1}",
+                        f"y {self.xLineIndex(x)+1}/{self.rowIndex(y)+1}",
                         posx+ (t if x < lx else 0),
                         posy+self.y[y]/2,
                         color=Color.ANNOTATIONS,
@@ -569,6 +801,20 @@ to remove the floor for this compartment.
         for l in floors:
             l.append(False)
         floors.append([False] * (lx+1))
+
+    def _buildObjects(self) -> None:
+        # the core Lid only knows the generic styles and params
+        lid = self.edgesettings.get("Lid", {})
+        base = lids.LidSettings
+        known = {**base.absolute_params, **base.relative_params}
+        core = {k: v for k, v in lid.items() if k in known}
+        if core.get("style") not in base.absolute_params["style"]:
+            core["style"] = "none"
+        self.edgesettings["Lid"] = core
+        super()._buildObjects()
+        self.edgesettings["Lid"] = lid
+        self.lidSettings = TrayLidSettings(self.thickness, True, **lid)
+        self.lid = TrayLid(self, self.lidSettings)
 
     def render(self) -> None:
         self.prepare()
