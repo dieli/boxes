@@ -157,9 +157,9 @@ verifying 3D placements for new generators.
   `boxes/generators/traylayout.py` (default `none` draws the same as before), so it carries over
   when converting a TypeTray.
 - TrayLayout also has a `sliding` lid style (`TrayLid` in `boxes/generators/traylayout.py`, not
-  offered by other generators): the back wall is one thickness lower and the front wall one higher,
-  so a two-layer lid slides in over the back wall; the lower layer's tab locks into finger holes
-  in the front wall. Optional magnet holes (`Lid_magnet_diameter`) and a grip slot in the top
+  offered by other generators): the front wall is one thickness lower and the back wall one higher,
+  so a two-layer lid slides in from the front over the lowered wall; the lower layer's tab locks
+  into finger holes in the back wall. Optional magnet holes (`Lid_magnet_diameter`) and a grip slot in the top
   layer when no handle is chosen.
 - TrayLayout: a size of 0 mm for the first or last row or column makes a liner, a second wall
   glued flat to the outer wall. It is a plain plate (no finger joints, no holes for it in the

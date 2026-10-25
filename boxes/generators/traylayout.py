@@ -39,8 +39,8 @@ class TrayLidSettings(lids.LidSettings):
 
 class TrayLid(lids.Lid):
     """Lid with an additional "sliding" style that only works with TrayLayout:
-    the back wall is lowered by one thickness so a two layer lid can slide in
-    over it; the lower layer locks into finger holes in the raised front wall."""
+    the front wall is lowered by one thickness so a two layer lid can slide in
+    over it; the lower layer locks into finger holes in the raised back wall."""
 
     def __call__(self, x: float, y: float, edge=None) -> bool:
         if self.settings.style != "sliding":
