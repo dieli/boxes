@@ -145,6 +145,11 @@ class TrayLayout(Boxes):
 
     fingerholes = "none"  # for subclasses with their own arguments
 
+    # Set by parse(): walls on the "+-+" lines, walls before each column, floors per cell.
+    hwalls: list[list[bool]]
+    vwalls: list[list[bool]]
+    floors: list[list[bool]]
+
     description = """This is a two step process. This is step 2.
 Edit the layout text graphics to adjust your tray.
 Put in the sizes for each column and row. You can replace the hyphens and
@@ -306,7 +311,9 @@ a liner glued to the outer wall (no finger joints).
         def lines(n: int, first: bool, last: bool) -> list[tuple[int, int]]:
             """(line, other) of each remaining grid line: an outer line takes the liner's
             line where its own wall is missing."""
-            return [(0, 1 if first else 0)] + [(k, k) for k in range(1 + first, n - last)] +                 [(n, n - 1 if last else n)]
+            return ([(0, 1 if first else 0)]
+                    + [(k, k) for k in range(1 + first, n - last)]
+                    + [(n, n - 1 if last else n)])
 
         self.hwalls = [[hw[a][c] or hw[b][c] for c in cols] for a, b in lines(ly, first_y, last_y)]
         self.vwalls = [[vw[r][a] or vw[r][b] for a, b in lines(lx, first_x, last_x)] for r in rows]
@@ -380,7 +387,7 @@ a liner glued to the outer wall (no finger joints).
             for s in p["sizes"]:
                 lengths += [s, t]
             lengths.pop()
-            top = "e"
+            top: str | boxes.edges.BaseEdge = "e"
             if self.fingerholes != "none":
                 top = boxes.edges.CompoundEdge(
                     self, ["Ae"[i % 2] for i in range(len(lengths))], lengths[::-1])
@@ -442,7 +449,8 @@ a liner glued to the outer wall (no finger joints).
         for pos in range(start, end):
             posx += sx[pos] / 2
             self.text(f"x {self.colIndex(pos)+1}/{self.yLineIndex(row)+1}" if x else
-                      f"y {self.xLineIndex(row)+1}/{self.rowIndex(pos)+1}", posx, 0, color=Color.ANNOTATIONS, align="center", fontsize=2*self.thickness)
+                      f"y {self.xLineIndex(row)+1}/{self.rowIndex(pos)+1}", posx, 0,
+                      color=Color.ANNOTATIONS, align="center", fontsize=2*self.thickness)
             posx += sx[pos] / 2 + self.thickness
 
     def walls(self, move=None):
