@@ -28,12 +28,12 @@ jobs:
         run: npm test
       - name: Build (wheel, Pyodide core, typecheck, bundle)
         run: npm run build
-      - name: Python tests (bridge, placements; core TrayLayout tests in the same process)
+      - name: Python tests (bridge, placements; core TrayLayout/TypeTray tests in the same process)
         working-directory: .
         run: >
           uv run --no-project --python 3.13
           --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest
-          python -m pytest web/tests/py tests/test_traylayout.py tests/test_traylayout_options.py -q
+          python -m pytest web/tests/py tests/test_traylayout.py tests/test_traylayout_options.py tests/test_typetray.py -q
       - name: Assembly checker (all placement maps)
         working-directory: .
         run: >

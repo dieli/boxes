@@ -53,6 +53,59 @@ def build(*args: str):
     return box, walls
 
 
+def build_holes(*args: str):
+    """Renders a TrayLayout; returns it and the holes drawn in the callbacks of rectangular
+    walls as dicts (label, kind, x, y: position in the wall's callback frame, length: of a
+    finger hole row)."""
+    box = TrayLayout()
+    box.parseArgs(["--outside=0", "--burn=0", *args])
+    box.metadata["reproducible"] = True
+    box.open()
+    holes: list[dict] = []
+    frame: list = []  # (label, inverse matrix of the callback frame) while a callback runs
+    draw = box.rectangularWall
+
+    def record(x, y, edges="eeee", *a, callback=None, label=None, **kw):
+        def wrap(cb):
+            def run():
+                frame.append((label, ~box.ctx._m))
+                try:
+                    cb()
+                finally:
+                    frame.pop()
+            return run if callable(cb) else cb
+
+        if callback is not None:
+            callback = [wrap(cb) for cb in callback]
+        return draw(x, y, edges, *a, callback=callback, label=label, **kw)
+
+    def note(kind, x, y, **extra):
+        if frame:
+            label, inv = frame[-1]
+            px, py = inv * (box.ctx._m * (x, y))
+            holes.append({"label": label, "kind": kind, "x": px, "y": py, **extra})
+
+    hole, rect_hole, finger_holes = box.hole, box.rectangularHole, box.fingerHolesAt
+
+    def hole_(x, y, *a, **kw):
+        note("hole", x, y, d=kw.get("d", 0))
+        return hole(x, y, *a, **kw)
+
+    def rect_hole_(x, y, dx, dy, *a, **kw):
+        note("rect", x, y)
+        return rect_hole(x, y, dx, dy, *a, **kw)
+
+    def finger_holes_(x, y, length, angle=90, **kw):
+        note("finger", x, y, length=length, angle=angle)
+        return finger_holes(x, y, length, angle, **kw)
+
+    box.rectangularWall, box.hole = record, hole_
+    box.rectangularHole, box.fingerHolesAt = rect_hole_, finger_holes_
+    box.render()
+    box.close()
+    return box, holes
+
+
 def labelled(walls, label):
     return [w for w in walls if w["label"] == label]
 
@@ -189,3 +242,64 @@ def test_other_generators_keep_the_core_lid():
     box.open()
     assert type(box.lid) is boxes.lids.Lid
     assert type(box.lidSettings) is boxes.lids.LidSettings
+
+
+# Positions in tray coordinates: x from the inside of the left wall, y from the inside of the
+# front wall. The lower lid layer's frame starts at (bs, -t) (between the side walls, from the
+# outside of the front wall), the upper layer's at (0, 0).
+
+def to_tray(hole, t, bs):
+    if hole["label"] == "lid bottom":
+        return hole["x"] + bs, hole["y"] - t
+    return hole["x"], hole["y"]
+
+
+@pytest.mark.parametrize("handle", ["none", "long_rounded"])
+def test_sliding_lid_handle_goes_through_both_layers(handle):
+    t, bs = 3.0, 0.1
+    _, holes = build_holes("--h=50", "--Lid_style=sliding", f"--Lid_handle={handle}",
+                           "--layout=" + grid([50, 50], [40, 60]))
+    lid = [h for h in holes if h["kind"] == "rect" and h["label"] in ("lid bottom", "lid top")]
+    if handle == "none":
+        # Only the upper layer has the grip slot, near the front.
+        assert [h["label"] for h in lid] == ["lid top"]
+        assert to_tray(lid[0], t, bs) == pytest.approx((51.5, 2 * t))
+        return
+    centres = {h["label"]: to_tray(h, t, bs) for h in lid}
+    assert set(centres) == {"lid bottom", "lid top"}
+    assert centres["lid bottom"] == pytest.approx(centres["lid top"])
+    # Centred on the lid: x across the inside, y between the front wall's outside and y - bs.
+    inner_y = 40 + 60 + t
+    assert centres["lid top"] == pytest.approx((51.5, (inner_y - bs - t) / 2))
+
+
+def test_sliding_lid_magnets_sit_behind_the_front_wall():
+    t, bs, md = 3.0, 0.1, 6.0
+    _, holes = build_holes("--h=50", "--Lid_style=sliding", "--Lid_handle=long_rounded",
+                           f"--Lid_magnet_diameter={md:g}", "--layout=" + grid([50, 50], [50]))
+    magnets = [to_tray(h, t, bs) for h in holes if h["kind"] == "hole" and h["label"] == "lid bottom"]
+    assert len(magnets) == 2
+    inner_x = 50 + 50 + t
+    for x, y in magnets:
+        assert y == pytest.approx(md / 2)  # spans 0 .. md behind the front wall
+        assert bs + t - 1e-9 <= x - md / 2 and x + md / 2 <= inner_x - bs - t + 1e-9  # clear of the sides
+    assert sorted(x for x, _ in magnets) == pytest.approx([bs + t + md / 2, inner_x - bs - t - md / 2])
+
+
+def test_sliding_lid_magnets_into_the_grip_slot_raise():
+    with pytest.raises(ValueError, match="grip slot"):
+        build("--Lid_style=sliding", "--Lid_magnet_diameter=6", "--layout=" + grid([25], [50]))
+
+
+def test_sliding_lid_fingers_match_the_back_wall_holes():
+    # No back wall over the first column: the lid's fingers only where the holes are.
+    t, bs = 3.0, 0.1
+    layout = grid([40, 60, 30], [50, 40]).replace("+-+-+-+\n", "+ +-+-+\n", 1)
+    box, holes = build_holes("--h=50", "--Lid_style=sliding", "--layout=" + layout)
+    rows = [h for h in holes if h["kind"] == "finger" and h["angle"] == 0]
+    assert len(rows) == 1  # one back wall piece, columns 2 and 3
+    start = 40 + t  # the piece starts at the second column
+    run = (start + rows[0]["x"], rows[0]["length"])
+    assert run == pytest.approx((start + bs, 60 + t + 30 - 2 * bs))
+    # The lower layer's back edge, from the left in tray coordinates.
+    assert [(s + bs, l) for s, l in box.lid.back_runs] == [pytest.approx(run)]
