@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import html
 import inspect
+import io
 from types import SimpleNamespace
 import json
 import math
@@ -95,6 +96,40 @@ def _arg_schema(a: argparse.Action, prefix: str | None) -> dict | None:
     return arg
 
 
+# Card ramps: printed wedges in the compartments so cards slide up and out. They are not
+# cut, so they only show in the 3D view and the STL exports (see placements._card_ramps).
+_RAMP_GENERATORS = {"TypeTray", "TrayLayout"}
+_RAMP_DEFAULTS = {"ramp": "0", "ramp_side": "front", "ramp_height": "15", "ramp_angle": "45"}
+_RAMP_GROUP = {"title": "Card ramps (3D print)", "collapsed": True, "args": [
+    {"name": "ramp", "label": "ramp", "kind": "bool", "default": False,
+     "help": "add a 3D printed ramp to every compartment so cards slide up and out "
+             "(3D view and STL export only, not in the 2D sheet)"},
+    {"name": "ramp_side", "label": "side", "kind": "select", "default": "front",
+     "options": [[s, s] for s in ("front", "back", "left", "right")],
+     "help": "wall the ramps lean against"},
+    {"name": "ramp_height", "label": "height", "kind": "text", "default": "15",
+     "help": "height at the wall in mm (at most the wall height)"},
+    {"name": "ramp_angle", "label": "angle", "kind": "text", "default": "45",
+     "help": "slope in degrees from the floor (the ramp gets shorter if the compartment is too short)"},
+]}
+
+
+def _ramp_settings(args: dict) -> dict | None:
+    """Takes the ramp arguments out of args; the settings if ramps are on."""
+    r = {k: str(args.pop(k, v)) for k, v in _RAMP_DEFAULTS.items()}
+    if not boxes.boolarg(r["ramp"]):
+        return None
+    if r["ramp_side"] not in ("front", "back", "left", "right"):
+        raise ValueError(f"ramp_side: unknown side {r['ramp_side']!r}")
+    out = {"side": r["ramp_side"]}
+    for k in ("height", "angle"):
+        try:
+            out[k] = float(r["ramp_" + k])
+        except ValueError:
+            raise ValueError(f"ramp_{k}: {r['ramp_' + k]!r} is not a number") from None
+    return out
+
+
 def get_schema(name: str) -> str:
     box = _generators[name]()
     groups = []
@@ -105,6 +140,8 @@ def get_schema(name: str) -> str:
         args = [s for s in (_arg_schema(a, prefix) for a in group._group_actions) if s]
         if args:
             groups.append({"title": group.title, "collapsed": i >= 3, "args": args})
+    if name in _RAMP_GENERATORS:
+        groups.append(_RAMP_GROUP)
     return json.dumps({
         "name": name,
         "doc": (box.__doc__ or "").strip(),
@@ -112,10 +149,11 @@ def get_schema(name: str) -> str:
     })
 
 
-def _render_box(name: str, args_json: str):
+def _render_box(name: str, args_json: str, fmt: str = "svg", join: bool = False, split: bool = False):
     box = _generators[name]()
     args = json.loads(args_json)
-    box.parseArgs([f"--{k}={v}" for k, v in args.items()] + ["--format=svg"])
+    box._web_ramp = _ramp_settings(args) if name in _RAMP_GENERATORS else None
+    box.parseArgs([f"--{k}={v}" for k, v in args.items()] + [f"--format={fmt}"])
     if name == "TrayLayout" and not box.layout.strip():
         # Like the server UI's JavaScript: without a layout, start from the sx x sy grid
         # (there is no layout file to fall back to in the browser).
@@ -126,12 +164,126 @@ def _render_box(name: str, args_json: str):
     box._web_args = {k: (list(v) if isinstance(v, list) else v) for k, v in vars(box).items()
                      if isinstance(v, (int, float, list)) and not isinstance(v, bool)}
     box.open()
+    surface = box.surface
+    reference = {id(p) for p in surface.parts if p.pathes or p.path}  # drawn by open()
     box.render()
+    if join or split:
+        finish = surface.finish
+
+        def joined_finish(*a, **kw):
+            for part in surface.parts:
+                _join_paths(part)
+            if not split:
+                return finish(*a, **kw)
+            # One file per part: finish() moves each part to the origin on its own sheet.
+            parts, box._web_files = surface.parts, []
+            for i, part in enumerate(parts):
+                if part.pathes:
+                    surface.parts = [part]
+                    box._web_files.append({"part": i, "reference": id(part) in reference,
+                                           "content": finish(*a, **kw).getvalue().decode("utf-8")})
+            surface.parts = parts
+            return io.BytesIO(b"")
+
+        surface.finish = joined_finish
     return box, box.close().getvalue().decode("utf-8")
 
 
-def render(name: str, args_json: str) -> str:
-    return _render_box(name, args_json)[1]
+def render(name: str, args_json: str, fmt: str = "svg") -> str:
+    """The file to download: like the preview, but with each contour as one continuous path."""
+    return _render_box(name, args_json, fmt, join=True)[1]
+
+
+def render_parts(name: str, args_json: str, fmt: str = "svg") -> str:
+    """One file per part (index of its <g id="p-N"> in the full SVG), for cutter software that
+    does not keep a file's groups: each import is then one part with its holes and label."""
+    return json.dumps(_render_box(name, args_json, fmt, split=True)[0]._web_files)
+
+
+# --- Joining path fragments -------------------------------------------------
+#
+# Boxes appends a path to an earlier one only if it starts where that one ends. Parts drawn
+# piece by piece (e.g. TrayLayout's base plate, edge by edge per cell) end up as many short
+# open subpaths, which some cutter software (e.g. Falcon Design Space) imports badly, and
+# which make the laser jump around. This chains them into continuous contours, reversing
+# pieces where needed. Only the order and direction of the cuts change, not their geometry.
+# Not used for the preview: the part recorder counts the paths as drawn.
+
+def _pt_key(x: float, y: float) -> tuple[float, float]:
+    return (round(x, 2), round(y, 2))
+
+
+def _reverse_subpath(sub: list) -> list:
+    out = [["M", *sub[-1][1:3]]]
+    for i in range(len(sub) - 1, 0, -1):
+        c, start = sub[i], sub[i - 1][1:3]
+        if c[0] == "C":
+            out.append(["C", *start, c[5], c[6], c[3], c[4]])
+        else:
+            out.append([c[0], *start])
+    return out
+
+
+def _join_paths(part) -> None:
+    from boxes.drawing import Path, points_equal
+    items: list[tuple[int, object]] = []  # (original order, Path kept as is | (group, subpath))
+    groups: list[dict] = []
+    for path in part.pathes:
+        cmds = [list(c) for c in path.path]
+        drawn = [c[0] for c in cmds if c[0] != "T"]
+        if (drawn and drawn[0] != "M") or any(c not in "MLC" for c in drawn):
+            items.append((len(items), path))  # anything unexpected: untouched
+            continue
+        g = next((i for i, params in enumerate(groups) if params == path.params), None)
+        if g is None:
+            groups.append(path.params)
+            g = len(groups) - 1
+        cur: list = []
+        for c in cmds:
+            if c[0] == "T":  # text sits in the same path but draws nothing: keep it on its own
+                items.append((len(items), Path([c], dict(path.params))))
+            elif c[0] == "M":
+                cur = [c]
+                items.append((len(items), (g, cur)))
+            else:
+                cur.append(c)
+    subs = [(n, it) for n, it in items if isinstance(it, tuple) and len(it[1]) > 1]
+    if len(subs) < 2:
+        return
+    closed = lambda sp: points_equal(*sp[0][1:3], *sp[-1][1:3])
+    at: dict[tuple, set[int]] = {}
+    for k, (_, (g, sp)) in enumerate(subs):
+        if not closed(sp):
+            for xy in (sp[0][1:3], sp[-1][1:3]):
+                at.setdefault((g, *_pt_key(*xy)), set()).add(k)
+    used = [False] * len(subs)
+
+    def take(g, xy, want_start: bool):
+        """An unused open subpath touching xy, oriented to start (or end) there."""
+        for k in sorted(at.get((g, *_pt_key(*xy)), ())):
+            if used[k]:
+                continue
+            sp = subs[k][1][1]
+            used[k] = True
+            starts_here = _pt_key(*sp[0][1:3]) == _pt_key(*xy)
+            return sp if starts_here == want_start else _reverse_subpath(sp)
+        return None
+
+    chains: list[tuple[int, Path]] = []
+    for k, (n, (g, sp)) in enumerate(subs):
+        if used[k]:
+            continue
+        used[k] = True
+        chain = list(sp)
+        while not closed(chain) and (nxt := take(g, chain[-1][1:3], True)):
+            chain += nxt[1:]
+        while not closed(chain) and (prv := take(g, chain[0][1:3], False)):
+            chain = prv + chain[1:]
+        if closed(chain):  # end exactly on the start so the SVG gets its "Z"
+            chain[-1][1:3] = chain[0][1:3]
+        chains.append((n, Path(chain, dict(groups[g]))))
+    kept = [(n, it) for n, it in items if not isinstance(it, tuple)]
+    part.pathes = [p for _, p in sorted(kept + chains, key=lambda e: e[0])]
 
 
 # --- Part recorder ----------------------------------------------------------
@@ -210,6 +362,8 @@ def _wrap_wall_helper(helper: str, describe):
             "params": d.get("params", {}),
             "_offset": d["offset"],
             "_probe": d.get("probe", (d["x"] / 2, d["y"] / 2)),
+            # Smallest outline (share of the bounding box) taken without the probe inside it.
+            "_min_area": d.get("min_area", 0.2),
             "_multi": d.get("multi", False),
             # Number of SVG parts and of paths in the last one when the helper returns, shared
             # by all copies of a multi part: a nested move() (e.g. stackable feet drawing their
@@ -315,7 +469,8 @@ def _describe_polygon_wall(box, a):
     # Bounding box of the polygon line itself (no edge margins).
     minx, miny, maxx, maxy = box._polygonWallExtend(borders, [box.edges["e"]])
     return {"x": maxx - minx, "y": maxy - miny, "edges": edges, "offset": (minx, miny),
-            "probe": None,
+            # Always draws its own outline, which may be a thin L (e.g. SkadisStand's side).
+            "probe": None, "min_area": 0.0,
             "params": {"borders": [list(b) if isinstance(b, (tuple, list)) else b for b in borders],
                        "start": [-minx, -miny]}}
 
@@ -396,10 +551,10 @@ _MIN_HOLE_AREA = 0.5  # mm²
 
 # Outlines whose ends are this close count as closed (mm); render_with_parts adds the burn:
 # burn compensation can shift a path's start (by up to burn * sqrt(2)) but not its end.
-_close_tol = 0.05
+_DEFAULT_CLOSE_TOL = 0.05
 
 
-def _polylines(part, to_local: Affine) -> list[list[tuple[float, float]]]:
+def _polylines(part, to_local: Affine, close_tol: float = _DEFAULT_CLOSE_TOL) -> list[list[tuple[float, float]]]:
     """Cut paths of a part as polylines in the wall's local frame (curves flattened)."""
     lines = []
     for path in part.pathes:
@@ -431,7 +586,7 @@ def _polylines(part, to_local: Affine) -> list[list[tuple[float, float]]]:
     a, b, c, d, e, f = tuple(to_local)[:6]
     out = [[(round(a * x + b * y + c, 3), round(d * x + e * y + f, 3)) for x, y in line] for line in lines]
     for line in out:
-        if len(line) > 3 and line[0] != line[-1] and math.dist(line[0], line[-1]) < _close_tol:
+        if len(line) > 3 and line[0] != line[-1] and math.dist(line[0], line[-1]) < close_tol:
             line[-1] = line[0]
     return out
 
@@ -448,14 +603,19 @@ def _inside(x: float, y: float, ring) -> bool:
     return inside
 
 
-def _outline(part, to_local: Affine, probe=None, min_area: float = 0.0) -> dict | None:
+def _in_bbox(x: float, y: float, bbox: tuple[float, float, float, float]) -> bool:
+    return bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]
+
+
+def _outline(part, to_local: Affine, probe=None, min_area: float = 0.0,
+             close_tol: float = _DEFAULT_CLOSE_TOL) -> dict | None:
     """Outer contour and holes of a part, or None if its cuts don't form a closed shape.
 
     The outer contour is the largest ring around probe (a local point inside the part, to
     pick the right piece when one SVG part holds several), else the largest ring if its
     area is at least min_area (e.g. a U-shaped wall whose middle is cut away).
     """
-    lines = _polylines(part, to_local)
+    lines = _polylines(part, to_local, close_tol)
     # Fast path: every cut is a closed ring; rings inside the outline are holes.
     if lines and all(l[0] == l[-1] and len(l) > 3 for l in lines):
         rings = sorted((l[:-1] for l in lines), key=lambda r: abs(_area(r)), reverse=True)
@@ -463,10 +623,12 @@ def _outline(part, to_local: Affine, probe=None, min_area: float = 0.0) -> dict 
         outer = (around or rings)[0]
         if not around and abs(_area(outer)) < min_area:
             return None  # only holes: the part's outline was drawn elsewhere
+        outer_bbox = _poly_bbox(outer)
         return {
             "outer": [list(p) for p in outer],
             "holes": [[list(p) for p in r] for r in rings
-                      if r is not outer and abs(_area(r)) >= _MIN_HOLE_AREA and _inside(*r[0], outer)],
+                      if r is not outer and abs(_area(r)) >= _MIN_HOLE_AREA
+                      and _in_bbox(*r[0], outer_bbox) and _inside(*r[0], outer)],
         }
     return _outline_shapely(lines, probe, min_area)
 
@@ -495,10 +657,10 @@ def _outline_shapely(lines, probe=None, min_area: float = 0.0) -> dict | None:
     }
 
 
-def _pieces(part, to_local: Affine) -> list[dict]:
+def _pieces(part, to_local: Affine, close_tol: float = _DEFAULT_CLOSE_TOL) -> list[dict]:
     """All separate pieces cut in a part (outer contour and holes each), e.g. a set of hinge
     eyes drawn as one part. Rings nested an even number of times are outlines."""
-    lines = _polylines(part, to_local)
+    lines = _polylines(part, to_local, close_tol)
     if lines and all(l[0] == l[-1] and len(l) > 3 for l in lines):
         rings = [l[:-1] for l in lines]
     else:
@@ -506,20 +668,24 @@ def _pieces(part, to_local: Affine) -> list[dict]:
         rings = [list(f.exterior.coords[:-1]) for f in faces]
     rings = [r for r in rings if abs(_area(r)) >= _MIN_HOLE_AREA]
     rings.sort(key=lambda r: abs(_area(r)), reverse=True)
+    bboxes = [_poly_bbox(r) for r in rings]
     pieces = []
     for i, r in enumerate(rings):
-        parents = [q for q in rings[:i] if _inside(*r[0], q)]
+        x0, y0 = r[0]
+        parents = [q for j, q in enumerate(rings[:i]) if _in_bbox(x0, y0, bboxes[j]) and _inside(x0, y0, q)]
         if len(parents) % 2 == 0:
-            pieces.append({"outer": [list(p) for p in r], "holes": [], "_depth": len(parents)})
+            pieces.append({"outer": [list(p) for p in r], "holes": [], "_bbox": bboxes[i]})
         else:  # a hole of the innermost enclosing piece
-            host = next(pc for pc in reversed(pieces) if _inside(*r[0], pc["outer"]))
+            host = next(pc for pc in reversed(pieces)
+                        if _in_bbox(x0, y0, pc["_bbox"]) and _inside(x0, y0, pc["outer"]))
             host["holes"].append([list(p) for p in r])
     for pc in pieces:
-        del pc["_depth"]
+        del pc["_bbox"]
     return pieces
 
 
-def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int]) -> list[dict]:
+def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int],
+                close_tol: float = _DEFAULT_CLOSE_TOL) -> list[dict]:
     """Pieces in SVG parts drawn without move() or a wall helper (e.g. MagazineFile's sides).
     Each one's local frame is its bounding box on the sheet, unrotated."""
     if rec.surface is None or rec.sheet is None:
@@ -530,7 +696,7 @@ def _unrecorded(rec: _Recorder, wall_parts: set[int], consumed: dict[int, int]) 
             continue
         if id(part) in consumed:  # partly merged into a wall: only what was drawn later
             part = SimpleNamespace(pathes=part.pathes[consumed[id(part)]:])
-        for piece in _pieces(part, ~rec.sheet):
+        for piece in _pieces(part, ~rec.sheet, close_tol):
             minx, miny, maxx, maxy = _poly_bbox(piece["outer"])
             shift = lambda ring: [[px - minx, py - miny] for px, py in ring]
             out.append({
@@ -556,8 +722,7 @@ def render_with_parts(name: str, args_json: str) -> str:
         box, svg = _render_box(name, args_json)
     finally:
         _recorder = None
-    global _close_tol
-    _close_tol = 0.05 + 2 * abs(box.burn)
+    close_tol = _DEFAULT_CLOSE_TOL + 2 * abs(box.burn)
     parts = []
     helper_parts = {id(w["_part"]) for w in rec.walls if not w.get("_free")}
     wall_parts = {id(w["_part"]) for w in rec.walls}
@@ -577,9 +742,10 @@ def render_with_parts(name: str, args_json: str) -> str:
         w.pop("_multi")
         if w.pop("_free", False):
             w.pop("_probe")
+            w.pop("_min_area", None)
             if id(part) in helper_parts:
                 continue  # a wall helper drew into the same SVG part
-            for outline in _pieces(part, ~sheet):  # each closed piece is a part of its own
+            for outline in _pieces(part, ~sheet, close_tol):  # each closed piece is a part of its own
                 parts.append({**w, "outline": outline})
             continue
         # Cuts that went into later SVG parts (after a nested helper's move()) belong here too.
@@ -592,19 +758,57 @@ def render_with_parts(name: str, args_json: str) -> str:
                 paths += q.pathes[:n]
                 consumed[id(q)] = max(consumed.get(id(q), 0), n)
             part = SimpleNamespace(pathes=paths)
-        w["outline"] = _outline(part, ~sheet, w.pop("_probe"), 0.2 * w["x"] * w["y"])
+        w["outline"] = _outline(part, ~sheet, w.pop("_probe"), w.pop("_min_area", 0.2) * w["x"] * w["y"], close_tol)
         parts.append(w)
-    parts += _unrecorded(rec, wall_parts, consumed)
+    parts += _unrecorded(rec, wall_parts, consumed, close_tol)
     try:
         asm = assemble(name, box, parts)
         placements, dims, handles, lines = (asm.placements, asm.dims, asm.handles, asm.lines) if asm else (None, [], [], [])
+        parts += [e.rec for e in asm.extras] if asm else []  # placed, so indices follow the walls
         assembly = placements is not None
     except Exception as e:  # a broken placement must not break the 2D preview
         placements, dims, handles, lines, assembly = None, [], [], [], f"{type(e).__name__}: {e}"
     for i, w in enumerate(parts):
         w["place"] = placements.get(i) if placements else None
+        # Size of the cut piece: x/y are the inner frame, without edges like "E" or fingers
+        # sticking out; the outline is burn compensated (not printed parts, drawn without it).
+        o = w["outline"]
+        kerf = 0.0 if w["helper"] == "printed" else 2 * abs(box.burn)
+        w["size"] = [max(q[k] for q in o["outer"]) - min(q[k] for q in o["outer"]) - kerf
+                     for k in (0, 1)] if o else None
     parts = [w for w in parts if not (w["place"] or {}).get("scrap")]
     return json.dumps({"svg": svg, "parts": parts, "assembly": assembly, "dims": dims,
                        "handles": handles,
                        "lines": lines,
                        "thickness": box.thickness})
+
+
+def _inset(outline: dict, d: float) -> dict | None:
+    """The outline shrunk by d on every side (holes grow), sharp corners kept."""
+    shape = Polygon(outline["outer"], outline["holes"]).buffer(0).buffer(-d, join_style=2)
+    if shape.is_empty:
+        return None
+    if shape.geom_type != "Polygon":  # thin bridges vanished: keep the main piece
+        shape = max(shape.geoms, key=lambda g: g.area)
+    return {
+        "outer": [list(p) for p in shape.exterior.coords[:-1]],
+        "holes": [[list(p) for p in ring.coords[:-1]] for ring in shape.interiors],
+    }
+
+
+def print_parts(name: str, args_json: str, clearance: float = 0.0) -> str:
+    """Parts for 3D printing: outlines without the laser's burn compensation, shrunk by
+    clearance / 2 on every side so each joint gets `clearance` of play in total.
+
+    (A negative burn does not work for this: Boxes' burn correction assumes it is positive.)
+    Returns {"parts", "thickness"} like render_with_parts().
+    """
+    args = {**json.loads(args_json), "burn": "0"}
+    result = json.loads(render_with_parts(name, json.dumps(args)))
+    if clearance > 0:
+        for p in result["parts"]:
+            if p["outline"]:
+                p["outline"] = _inset(p["outline"], clearance / 2)
+            if p["helper"] == "printed" and (p["place"] or {}).get("t"):  # e.g. ramps: fit between the walls
+                p["place"]["t"] = max(p["place"]["t"] - clearance, 0.1)
+    return json.dumps({"parts": result["parts"], "thickness": result["thickness"]})

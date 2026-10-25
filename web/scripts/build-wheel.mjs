@@ -13,8 +13,9 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
 const attempts = [
+  ["uv", ["build", "--offline", "-q", "--wheel", "--out-dir", out, repo]],
   ["uv", ["build", "-q", "--wheel", "--out-dir", out, repo]],
-  [process.platform === "win32" ? "py" : "python3", ["-m", "pip", "wheel", "--no-deps", "-w", out, repo]],
+  [process.platform === "win32" ? "py" : "python3", ["-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "-w", out, repo]],
 ];
 let built = false;
 for (const [cmd, args] of attempts) {

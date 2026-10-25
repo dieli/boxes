@@ -1,12 +1,14 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
-import { bendGeometry } from "./bend";
-import type { Dimension, GridLine, Handle, Placement, RecordedPart, Vec3 } from "./protocol";
+import { basis, buildPartGeometry } from "./stl";
+import type { Dimension, GridLine, Handle, Placement, RecordedPart } from "./protocol";
 
 const WOOD = 0xd9b382;
 const WOOD_EDGE = 0x6b4f2e;
 const SELECTED = 0xf97316;
+/** 3D printed parts (helper "printed", e.g. card ramps). */
+const PRINTED = 0x7fb3d5;
 const DIMENSION = 0x2563eb;
 const REMOVE = 0xdc2626;
 const ADD = 0x16a34a;
@@ -18,9 +20,19 @@ interface PartObject {
   svgPart: number;
   group: THREE.Group;
   mesh: THREE.Mesh;
+  material: THREE.Material;
   base: THREE.Matrix4;
+  normal: THREE.Vector3;
   /** Unit direction the part moves in the exploded view. */
   explodeDir: THREE.Vector3;
+}
+
+/**
+ * Smallest size of compartment k of n when dragging or typing: 1 mm, but 0 for the first and
+ * last of TrayLayout's layout (dimensions with an axis), where 0 makes a glued liner.
+ */
+function minSize(axis: "x" | "y" | null, k: number, n: number): number {
+  return axis && (k === 0 || k === n - 1) ? 0 : 1;
 }
 
 /** Extruded, assembled 3D view of the recorded parts. */
@@ -32,6 +44,7 @@ export class AssemblyView {
   private root = new THREE.Group();
   private objects: PartObject[] = [];
   private material = new THREE.MeshStandardMaterial({ color: WOOD, roughness: 0.85, side: THREE.DoubleSide });
+  private printedMaterial = new THREE.MeshStandardMaterial({ color: PRINTED, roughness: 0.5, side: THREE.DoubleSide });
   private selectedMaterial = new THREE.MeshStandardMaterial({ color: SELECTED, roughness: 0.7, side: THREE.DoubleSide });
   private edgeMaterial = new THREE.LineBasicMaterial({ color: WOOD_EDGE });
   private sun = new THREE.DirectionalLight(0xffffff, 2.2);
@@ -137,6 +150,7 @@ export class AssemblyView {
       const partCenter = new THREE.Box3().setFromObject(o.group).getCenter(new THREE.Vector3());
       o.explodeDir = partCenter.sub(center);
       if (o.explodeDir.lengthSq() > 1e-6) o.explodeDir.normalize();
+      else o.explodeDir.copy(o.normal).normalize();
     }
     this.applyExplode();
     this.applySelection();
@@ -164,6 +178,7 @@ export class AssemblyView {
     for (const c of [...this.dims.children]) {
       this.dims.remove(c);
       if (c instanceof THREE.LineSegments) c.geometry.dispose();
+      if (c instanceof CSS2DObject) c.element.remove();
     }
     const size = new THREE.Box3().setFromObject(this.root).getSize(new THREE.Vector3());
     const gap = Math.max(10, 0.12 * Math.max(size.x, size.y, size.z));
@@ -293,7 +308,8 @@ export class AssemblyView {
     const pair = values[k] + values[k + 1];
     let size = values[k] + p.sub(d.start).dot(d.dir) * scale;
     if (!e.shiftKey) size = Math.round(size / this.snap) * this.snap;
-    size = Math.round(Math.min(Math.max(size, 1), pair - 1) * 100) / 100;
+    const min = (i: number) => minSize(d.line.axis, i, values.length);
+    size = Math.round(Math.min(Math.max(size, min(k)), pair - min(k + 1)) * 100) / 100;
     const next = Math.round((pair - size) * 100) / 100;
     d.values = values.map((v, i) => (i === k ? size : i === k + 1 ? next : v));
     const offset = d.dir.clone().multiplyScalar((size - values[k]) / scale);
@@ -369,20 +385,24 @@ export class AssemblyView {
     if (!this.dims.visible) return;
     const labels = [...this.labels.domElement.querySelectorAll<HTMLElement>(".dim3d")];
     for (const l of labels) l.style.translate = "";
+    // Read all bounding boxes in one pass before writing styles to avoid forced layout thrashing.
+    const rects = labels.map((l) => l.getBoundingClientRect());
     const placed: DOMRect[] = [];
+    const shifts: [HTMLElement, number][] = [];
     const overlaps = (a: DOMRect, b: DOMRect) =>
       a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-    for (const l of labels) {
-      let r = l.getBoundingClientRect();
+    for (let i = 0; i < labels.length; i++) {
+      let r = rects[i];
       if (!r.width) continue;
       let dy = 0;
       for (let step = 0; step < 8 && placed.some((p) => overlaps(p, r)); step++) {
         dy += r.height + 2;
         r = new DOMRect(r.x, r.y + r.height + 2, r.width, r.height);
       }
-      if (dy) l.style.translate = `0 ${dy}px`;
+      if (dy) shifts.push([labels[i], dy]);
       placed.push(r);
     }
+    for (const [l, dy] of shifts) l.style.translate = `0 ${dy}px`;
   }
 
   private dimLabel(dim: Dimension, focused: string | undefined): HTMLElement {
@@ -398,9 +418,10 @@ export class AssemblyView {
     input.value = formatMm(dim.value);
     input.size = Math.max(3, input.value.length);
     input.title = "Enter to apply, ↑/↓ to step (Shift: 10)";
+    const min = dim.index !== null && dim.values ? minSize(dim.axis, dim.index, dim.values.length) : 1;
     const commit = () => {
       const v = Number(input.value.replace(",", "."));
-      if (Number.isFinite(v) && v > 0 && v !== dim.value) this.onDimension(dim, v);
+      if (Number.isFinite(v) && v >= min && (v > 0 || min === 0) && v !== dim.value) this.onDimension(dim, v);
       else input.value = formatMm(dim.value);
     };
     input.addEventListener("change", commit);
@@ -412,7 +433,8 @@ export class AssemblyView {
       } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         e.preventDefault();
         const step = (e.shiftKey ? 10 : 1) * (e.key === "ArrowUp" ? 1 : -1);
-        const v = Math.max(1, (Number(input.value.replace(",", ".")) || dim.value) + step);
+        const typed = Number(input.value.replace(",", "."));
+        const v = Math.max(min, (Number.isFinite(typed) ? typed : dim.value) + step);
         input.value = formatMm(v);
         this.onDimension(dim, v);
       }
@@ -476,14 +498,9 @@ export class AssemblyView {
   }
 
   private buildPart(part: RecordedPart, p: Placement, thickness: number): PartObject {
-    const { outer, holes } = part.outline!;
-    const shape = new THREE.Shape(outer.map(([x, y]) => new THREE.Vector2(x, y)));
-    shape.holes = holes.map((h) => new THREE.Path(h.map(([x, y]) => new THREE.Vector2(x, y))));
-    const flat = new THREE.ExtrudeGeometry(shape, { depth: p.t ?? thickness, bevelEnabled: false, curveSegments: 1 });
-    const geometry = p.bend?.length ? bendGeometry(flat, p.bend) : flat;
-    if (geometry !== flat) flat.dispose();
-
-    const mesh = new THREE.Mesh(geometry, this.material);
+    const geometry = buildPartGeometry(part, p, thickness);
+    const material = part.helper === "printed" ? this.printedMaterial : this.material;
+    const mesh = new THREE.Mesh(geometry, material);
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 20), this.edgeMaterial);
     const group = new THREE.Group();
     group.add(mesh, edges);
@@ -493,7 +510,7 @@ export class AssemblyView {
     group.userData.svgPart = part.part;
     this.root.add(group);
     this.root.updateMatrixWorld(true);
-    return { svgPart: part.part, group, mesh, base, explodeDir: new THREE.Vector3() };
+    return { svgPart: part.part, group, mesh, material, base, normal: new THREE.Vector3(...p.n), explodeDir: new THREE.Vector3() };
   }
 
   private applyExplode() {
@@ -508,7 +525,7 @@ export class AssemblyView {
 
   private applySelection() {
     for (const o of this.objects) {
-      o.mesh.material = o.svgPart === this.selected ? this.selectedMaterial : this.material;
+      o.mesh.material = o.svgPart === this.selected ? this.selectedMaterial : o.material;
     }
     this.needsRender = true;
   }
@@ -596,14 +613,4 @@ export class AssemblyView {
 
 function formatMm(v: number): string {
   return String(Math.round(v * 100) / 100);
-}
-
-/** Matrix with columns ux, uy, n and translation origin (may be a reflection). */
-function basis(origin: Vec3, ux: Vec3, uy: Vec3, n: Vec3): THREE.Matrix4 {
-  return new THREE.Matrix4().set(
-    ux[0], uy[0], n[0], origin[0],
-    ux[1], uy[1], n[1], origin[1],
-    ux[2], uy[2], n[2], origin[2],
-    0, 0, 0, 1,
-  );
 }

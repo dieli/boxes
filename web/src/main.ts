@@ -2,7 +2,7 @@ import "./style.css";
 import { BoxesClient, BoxesError, type RenderResult } from "./boxesClient";
 import { ParamForm } from "./form";
 import { defaultLayout, mergeLayout, mergePair, mergeSizes, setLayoutSize, splitLayout, splitSizes, toggleLayout } from "./layout";
-import type { ArgValues, Dimension, GeneratorInfo, GridLine, Handle, Placement, Point2, RecordedPart } from "./protocol";
+import type { ArgValues, Dimension, GeneratorGroup, GeneratorInfo, GridLine, Handle, Placement, Point2, RecordedPart } from "./protocol";
 import type { AssemblyView } from "./view3d";
 
 const DEBOUNCE_MS = 150;
@@ -11,6 +11,7 @@ const DEFAULT_GENERATOR = "ABox";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $("status");
 const picker = $<HTMLSelectElement>("generator");
+const filterInput = $<HTMLInputElement>("generator-filter");
 const docEl = $("doc");
 const views = $("views");
 const preview = $("preview");
@@ -22,16 +23,22 @@ const showDimsInput = $<HTMLInputElement>("show-dims");
 const panel3d = $("panel3d");
 const no3dEl = $("no3d");
 const flatNote = $("flat-note");
+const sheetSizeEl = $("sheet-size");
 const timingEl = $("timing");
 const errorEl = $("error");
 const downloadBtn = $<HTMLButtonElement>("download");
+const exportFormatSelect = $<HTMLSelectElement>("export-format");
+const exportPartSelect = $<HTMLSelectElement>("export-part");
+const clearanceRow = $("print-clearance-row");
+const clearanceInput = $<HTMLInputElement>("print-clearance");
 
 const client = new BoxesClient(new URL("wheels/", document.baseURI).href);
 client.onStatus = (text) => (statusEl.textContent = text);
 
+let generatorGroups: GeneratorGroup[] = [];
+let generatorList: GeneratorInfo[] = [];
 let generators = new Map<string, GeneratorInfo>();
 let current = "";
-let lastSvg = "";
 let lastParts: RecordedPart[] = [];
 let lastThickness = 3;
 let zoom = 1;
@@ -154,6 +161,22 @@ function syncLayout() {
   form.set("layout", lastDefaultLayout, false);
 }
 
+function populatePicker(filter = "") {
+  const q = filter.trim().toLowerCase();
+  picker.replaceChildren();
+  for (const group of generatorGroups) {
+    const members = generatorList.filter(
+      (g) => g.group === group.name && (!q || g.name.toLowerCase().includes(q) || g.doc.toLowerCase().includes(q)),
+    );
+    if (!members.length) continue;
+    const og = document.createElement("optgroup");
+    og.label = group.title;
+    for (const g of members) og.append(new Option(g.name, g.name));
+    picker.append(og);
+  }
+  if (current && [...picker.options].some((o) => o.value === current)) picker.value = current;
+}
+
 // --- Generator loading & rendering ---
 
 async function loadGenerator(name: string, initial: ArgValues = {}) {
@@ -163,6 +186,10 @@ async function loadGenerator(name: string, initial: ArgValues = {}) {
     hiddenKeys = new Set();
   }
   current = name;
+  if (filterInput.value && ![...picker.options].some((o) => o.value === name)) {
+    filterInput.value = "";
+    populatePicker();
+  }
   picker.value = name;
   const schema = await client.schema(name);
   if (current !== name) return;
@@ -181,17 +208,27 @@ async function render() {
   try {
     const result = await client.render(name, form.values());
     if (!result || name !== current) return; // superseded by a newer request
-    lastSvg = result.svg;
     lastParts = result.parts;
     lastThickness = result.thickness;
-    preview.innerHTML = result.svg;
+    const doc = new DOMParser().parseFromString(result.svg, "image/svg+xml");
+    if (doc.querySelector("parsererror")) throw new Error("The generator produced an invalid SVG");
+    for (const s of doc.querySelectorAll("script")) s.remove();
+    const svgEl = doc.documentElement;
+    preview.replaceChildren(svgEl);
+    const wAttr = Number.parseFloat(svgEl.getAttribute("width") ?? "");
+    const hAttr = Number.parseFloat(svgEl.getAttribute("height") ?? "");
+    sheetSizeEl.textContent = Number.isFinite(wAttr) && Number.isFinite(hAttr)
+      ? `Sheet ${Math.round(wAttr)} × ${Math.round(hAttr)} mm`
+      : "";
     applyZoom();
     if (selected !== null && !preview.querySelector(`#p-${selected}`)) selected = null;
     applySelection2d();
+    updateExportOptions(result.parts);
     await update3d(name, result);
     const total = performance.now() - t0;
     timingEl.textContent = `${total.toFixed(0)} ms (Python ${result.ms.toFixed(0)} ms)`;
     showError(null);
+    exportFormatSelect.disabled = false;
     downloadBtn.disabled = false;
   } catch (e) {
     showError(e);
@@ -396,17 +433,75 @@ async function update3d(name: string, result: RenderResult) {
   applyHidden();
 }
 
-// --- Parts list with per-part visibility in 3D ---
+// --- Parts list with per-part visibility & STL export ---
 
-/** Name for each part that stays stable across parameter changes: label (numbered if repeated) or index. */
+/** Name for each part that stays stable across parameter changes: label or placement name (numbered if repeated) or index. */
 function partKeys(parts: RecordedPart[]): string[] {
   const seen = new Map<string, number>();
   return parts.map((p, i) => {
-    if (!p.label) return `#${i}`;
-    const n = (seen.get(p.label) ?? 0) + 1;
-    seen.set(p.label, n);
-    return n > 1 ? `${p.label} ${n}` : p.label;
+    const base = p.label || p.place?.name;
+    if (!base) return `#${i}`;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return n > 1 ? `${base} ${n}` : base;
   });
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  a.click();
+  // Revoking right away can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** Size of the cut piece (with edges sticking out, e.g. a lid's "E" edges); printed parts with their width. */
+function partSize(p: RecordedPart): string {
+  const [w, h] = p.size ?? [p.x, p.y];
+  return p.helper === "printed" && p.place?.t ? `${fmt(w)}×${fmt(h)}×${fmt(p.place.t)}` : `${fmt(w)}×${fmt(h)}`;
+}
+
+function partDisplayLabel(p: RecordedPart, i: number, key: string): string {
+  return key.startsWith("#") ? p.place?.name || `part ${i + 1}` : key;
+}
+
+function updateExportOptions(parts: RecordedPart[]) {
+  const keys = partKeys(parts);
+  const prevIdx = exportPartSelect.value;
+  exportPartSelect.replaceChildren();
+  parts.forEach((p, i) => {
+    if (!p.outline) return;
+    const label = partDisplayLabel(p, i, keys[i]);
+    exportPartSelect.append(new Option(`${label} (${partSize(p)} mm)`, String(i)));
+  });
+  const hasOutlines = exportPartSelect.options.length > 0;
+  for (const opt of exportFormatSelect.options) {
+    if (opt.value.startsWith("stl-")) opt.disabled = !hasOutlines;
+  }
+  if (!hasOutlines && exportFormatSelect.value.startsWith("stl-")) {
+    exportFormatSelect.value = "svg";
+  }
+  syncExportPartSelection(prevIdx);
+  syncExportControls();
+}
+
+function syncExportControls() {
+  const format = exportFormatSelect.value;
+  exportPartSelect.hidden = format !== "stl-part" || !exportPartSelect.options.length;
+  clearanceRow.hidden = !format.startsWith("stl-");
+}
+
+function syncExportPartSelection(fallbackIdx = "") {
+  if (selected !== null) {
+    const idx = lastParts.findIndex((p) => p.part === selected && p.outline);
+    if (idx >= 0) {
+      exportPartSelect.value = String(idx);
+      return;
+    }
+  }
+  if (fallbackIdx && [...exportPartSelect.options].some((o) => o.value === fallbackIdx)) {
+    exportPartSelect.value = fallbackIdx;
+  }
 }
 
 function buildPartsList(parts: RecordedPart[]) {
@@ -428,13 +523,18 @@ function buildPartsList(parts: RecordedPart[]) {
       else hiddenKeys.add(key);
       applyHidden();
     });
-    const label = key.startsWith("#") ? p.place?.name || `part ${i + 1}` : key;
+    const label = partDisplayLabel(p, i, key);
+    const printed = p.helper === "printed";
+    const size = partSize(p);
     li.append(
       box,
       Object.assign(document.createElement("span"), { className: "name", textContent: label, title: label }),
-      Object.assign(document.createElement("span"), { className: "size", textContent: `${fmt(p.x)}×${fmt(p.y)}` }),
+      Object.assign(document.createElement("span"), { className: "size", textContent: size }),
     );
-    if (!p.place) {
+    if (printed) {
+      li.title = "3D printed: in the 3D view and STL exports, not in the 2D sheet";
+      li.append(Object.assign(document.createElement("span"), { className: "note", textContent: "print" }));
+    } else if (!p.place) {
       li.classList.add("unplaced");
       li.title = "Shown in the 2D sheet only";
       li.append(Object.assign(document.createElement("span"), { className: "note", textContent: "2D" }));
@@ -466,6 +566,7 @@ function select(part: number | null) {
   selected = part;
   applySelection2d();
   applySelectionList();
+  syncExportPartSelection(exportPartSelect.value);
   view3d?.setSelected(part);
 }
 
@@ -481,22 +582,32 @@ function applySelection2d() {
   if (selected !== null) preview.querySelector(`#p-${selected}`)?.classList.add("selected");
 }
 
-/** Recorded part whose outline contains the point (SVG user units), or null. */
+/**
+ * Recorded part whose outline contains the point (SVG user units) and is not inside one of its
+ * holes. When a smaller piece is nested inside another part's bounding box, picks the smallest.
+ */
 function partAt(x: number, y: number): number | null {
+  let bestPart: number | null = null;
+  let bestArea = Infinity;
   for (const p of lastParts) {
     const [a, b, c, d, e, f] = p.matrix;
     // Invert X = a*x + b*y + c, Y = d*x + e*y + f.
     const det = a * e - b * d;
+    if (Math.abs(det) < 1e-12) continue;
     const dx = x - c;
     const dy = y - f;
     const lx = (e * dx - b * dy) / det;
     const ly = (a * dy - d * dx) / det;
     const inside = p.outline
-      ? pointInPolygon(lx, ly, p.outline.outer)
+      ? pointInPolygon(lx, ly, p.outline.outer) && !p.outline.holes.some((h) => pointInPolygon(lx, ly, h))
       : lx >= 0 && lx <= p.x && ly >= 0 && ly <= p.y;
-    if (inside) return p.part;
+    const area = p.x * p.y;
+    if (inside && area < bestArea) {
+      bestArea = area;
+      bestPart = p.part;
+    }
   }
-  return null;
+  return bestPart;
 }
 
 function pointInPolygon(x: number, y: number, poly: Point2[]): boolean {
@@ -526,6 +637,33 @@ preview.addEventListener("click", (ev) => {
 // --- Wiring ---
 
 picker.addEventListener("change", () => void loadGenerator(picker.value));
+filterInput.addEventListener("input", () => populatePicker(filterInput.value));
+filterInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && picker.value && picker.value !== current) {
+    void loadGenerator(picker.value);
+  } else if (e.key === "ArrowDown" && picker.options.length) {
+    e.preventDefault();
+    picker.focus();
+  }
+});
+exportFormatSelect.addEventListener("change", syncExportControls);
+try {
+  const saved = localStorage.getItem("boxes-live.clearance");
+  if (saved !== null && Number.isFinite(Number(saved))) clearanceInput.value = saved;
+} catch {
+  // storage unavailable: keep the default
+}
+clearanceInput.addEventListener("change", () => {
+  try {
+    localStorage.setItem("boxes-live.clearance", clearanceInput.value);
+  } catch {
+    // storage unavailable: the setting just isn't kept
+  }
+});
+exportPartSelect.addEventListener("change", () => {
+  const p = lastParts[Number(exportPartSelect.value)];
+  if (p) select(p.part);
+});
 window.addEventListener("hashchange", () => {
   const { name, args } = readHash();
   void loadGenerator(name, args);
@@ -564,25 +702,105 @@ $("reset-camera").addEventListener("click", () => view3d?.resetCamera());
 showDimsInput.addEventListener("change", () => view3d?.setDimensionsVisible(showDimsInput.checked));
 $("show-all").addEventListener("click", () => setAllHidden(false));
 $("hide-all").addEventListener("click", () => setAllHidden(true));
-downloadBtn.addEventListener("click", () => {
-  const url = URL.createObjectURL(new Blob([lastSvg], { type: "image/svg+xml" }));
-  const a = Object.assign(document.createElement("a"), { href: url, download: `${current}.svg` });
-  a.click();
-  URL.revokeObjectURL(url);
+downloadBtn.addEventListener("click", async () => {
+  const format = exportFormatSelect.value;
+  if (format === "svg-parts") {
+    downloadBtn.disabled = true;
+    try {
+      await exportSvgParts();
+    } catch (e) {
+      showError(e);
+    } finally {
+      downloadBtn.disabled = false;
+    }
+    return;
+  }
+  // Rendered again (not the preview's SVG): the bridge joins each contour into one path.
+  if (format === "svg" || format === "lbrn2" || format === "ps" || format === "svg_Ponoko") {
+    downloadBtn.disabled = true;
+    try {
+      const content = await client.exportFormat(current, form.values(), format);
+      const ext = format === "svg_Ponoko" ? "-ponoko.svg" : `.${format}`;
+      const mime = format === "ps" ? "application/postscript" : format === "lbrn2" ? "application/xml" : "image/svg+xml";
+      downloadBlob(new Blob([content], { type: mime }), `${current}${ext}`);
+    } catch (e) {
+      showError(e);
+    } finally {
+      downloadBtn.disabled = false;
+    }
+    return;
+  }
+  downloadBtn.disabled = true;
+  try {
+    await exportStl(format);
+  } catch (e) {
+    showError(e);
+  } finally {
+    downloadBtn.disabled = false;
+  }
 });
+
+/** A ZIP with one SVG per part, named after the parts, for cutter software that loses the groups. */
+async function exportSvgParts() {
+  const [files, { zipStore }, { safeName }] = await Promise.all([
+    client.exportParts(current, form.values(), "svg"),
+    import("./zip"),
+    import("./names"),
+  ]);
+  const keys = partKeys(lastParts);
+  const labels = new Map<number, string[]>();
+  lastParts.forEach((p, i) => {
+    const names = labels.get(p.part) ?? [];
+    const label = partDisplayLabel(p, i, keys[i]);
+    if (!names.includes(label)) names.push(label);
+    labels.set(p.part, names);
+  });
+  const enc = new TextEncoder();
+  const used = new Set<string>();
+  const entries = files.map((f, n) => {
+    const base = safeName(f.reference ? "reference" : (labels.get(f.part) ?? [`part ${n + 1}`]).join("+"));
+    let name = base;
+    for (let k = 2; used.has(name); k++) name = `${base}_${k}`;
+    used.add(name);
+    return { name: `${String(n + 1).padStart(2, "0")}-${name}.svg`, data: enc.encode(f.content) };
+  });
+  if (entries.length) downloadBlob(zipStore(entries), `${current}-svg-parts.zip`);
+}
+
+/** STL for 3D printing, from a render without the laser's burn and with the print clearance. */
+async function exportStl(format: string) {
+  const clearance = Math.max(0, Number(clearanceInput.value) || 0);
+  const [{ assemblyStl, partStl, partsZip }, { safeName }, { parts, thickness }] = await Promise.all([
+    import("./stl"),
+    import("./names"),
+    client.printParts(current, form.values(), clearance),
+  ]);
+  // Same render apart from the burn, so parts line up with lastParts by index.
+  const keys = partKeys(lastParts);
+  const names = parts.map((p, i) => partDisplayLabel(p, i, keys[i] ?? `#${i}`));
+  const stl = (data: ArrayBuffer | null, name: string) => {
+    if (data) downloadBlob(new Blob([data], { type: "model/stl" }), `${current}-${name}.stl`);
+  };
+  if (format === "stl-assembly") {
+    const hidden = new Set(lastParts.flatMap((p, i) => (hiddenKeys.has(keys[i]) ? [p.part] : [])));
+    stl(assemblyStl(parts, thickness, hidden), "assembly");
+  } else if (format === "stl-zip") {
+    const zip = partsZip(parts, names, thickness);
+    if (zip) downloadBlob(zip, `${current}-parts.zip`);
+  } else if (format === "stl-part") {
+    const idx = Number(exportPartSelect.value);
+    if (parts[idx]) stl(partStl(parts[idx], thickness), safeName(names[idx]));
+  }
+}
 
 client.ready.then(
   async ({ groups, generators: list, loadMs }) => {
+    generatorGroups = groups;
+    generatorList = list;
     generators = new Map(list.map((g) => [g.name, g]));
-    for (const group of groups) {
-      const members = list.filter((g) => g.group === group.name);
-      if (!members.length) continue;
-      const og = document.createElement("optgroup");
-      og.label = group.title;
-      for (const g of members) og.append(new Option(g.name, g.name));
-      picker.append(og);
-    }
+    populatePicker();
     picker.disabled = false;
+    filterInput.disabled = false;
     statusEl.textContent = `Ready in ${(loadMs / 1000).toFixed(1)} s`;
     const { name, args } = readHash();
     await loadGenerator(name || DEFAULT_GENERATOR, args);

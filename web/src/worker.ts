@@ -16,6 +16,9 @@ interface Bridge {
   list_generators(): string;
   get_schema(name: string): string;
   render_with_parts(name: string, argsJson: string): string;
+  render(name: string, argsJson: string, fmt: string): string;
+  print_parts(name: string, argsJson: string, clearance: number): string;
+  render_parts(name: string, argsJson: string, fmt: string): string;
 }
 
 let bridge: Bridge | null = null;
@@ -82,6 +85,16 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
         bridge.render_with_parts(msg.generator, JSON.stringify(msg.args)),
       );
       post({ type: "rendered", id: msg.id, svg, parts, assembly, dims, handles, lines, thickness, ms: performance.now() - t });
+    } else if (msg.type === "export") {
+      const args = JSON.stringify(msg.args);
+      // "<fmt>-parts": one file per part, as JSON [{part, reference, content}]
+      const content = msg.format.endsWith("-parts")
+        ? bridge.render_parts(msg.generator, args, msg.format.slice(0, -"-parts".length))
+        : bridge.render(msg.generator, args, msg.format);
+      post({ type: "exported", id: msg.id, content });
+    } else if (msg.type === "printParts") {
+      const { parts, thickness } = JSON.parse(bridge.print_parts(msg.generator, JSON.stringify(msg.args), msg.clearance));
+      post({ type: "printParts", id: msg.id, parts, thickness });
     }
   } catch (e) {
     post({ type: "error", id: "id" in msg ? msg.id : null, ...errorMessage(e) });

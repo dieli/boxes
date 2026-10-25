@@ -14,12 +14,35 @@
       </header>
       <label class="picker">
         Generator
+        <input id="generator-filter" type="search" placeholder="Filter generators…" spellcheck="false" disabled />
         <select id="generator" disabled></select>
       </label>
       <p id="doc"></p>
-      <div class="actions">
-        <button id="download" disabled>Download SVG</button>
-        <button id="reset" class="secondary">Reset to defaults</button>
+      <div class="export-bar">
+        <div class="export-row">
+          <select id="export-format" title="Export format" disabled>
+            <optgroup label="2D Laser / CNC">
+              <option value="svg">SVG (2D sheet)</option>
+              <option value="svg-parts">SVG (each part, .zip)</option>
+              <option value="lbrn2">LightBurn (.lbrn2)</option>
+              <option value="ps">PostScript (.ps)</option>
+              <option value="svg_Ponoko">SVG Ponoko (.svg)</option>
+            </optgroup>
+            <optgroup label="3D Print / CAD">
+              <option value="stl-assembly">STL (3D assembly)</option>
+              <option value="stl-zip">STL (each part flat, .zip)</option>
+              <option value="stl-part">STL (single part…)</option>
+            </optgroup>
+          </select>
+          <button id="download" disabled>Download</button>
+          <button id="reset" class="secondary" title="Reset parameters to defaults">Reset</button>
+        </div>
+        <select id="export-part" title="Part to export as STL" hidden></select>
+        <label id="print-clearance-row" class="export-row" hidden
+               title="Play per joint for printed parts: every part shrinks by half of this on each side. The laser kerf (burn) is not used for STL.">
+          Print clearance
+          <input id="print-clearance" type="number" min="0" max="2" step="0.05" value="0.15" /> mm
+        </label>
       </div>
       <form id="form" onsubmit="return false"></form>
     </aside>
@@ -30,6 +53,7 @@
         <button id="zoom-in" title="Zoom in">+</button>
         <button id="undo" title="Undo (Ctrl+Z)" disabled>↶</button>
         <button id="redo" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" disabled>↷</button>
+        <span id="sheet-size" title="2D sheet bounding box"></span>
         <span id="timing"></span>
       </div>
       <div id="error" hidden></div>

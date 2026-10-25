@@ -24,9 +24,40 @@ npm run build    # static site in web/dist/
   (the same source `scripts/boxesserver` uses) and renders SVG.
 - `src/form.ts` builds the form from that schema. Changes are debounced (150 ms) and rendered
   "latest wins", so stale requests never queue up.
+- Generator search filter over names and descriptions (Down arrow moves into the list, Enter loads
+  the selected generator).
+- The toolbar displays the 2D sheet bounding box (`W × H mm`) alongside render timing.
 - The current generator and non-default arguments live in the URL hash, so links are shareable.
+  This is also the only way to keep a design for now: bookmark the URL to come back and edit it.
+
+## Export
+
+- **SVG** is the preview itself. **LightBurn (.lbrn2)**, **PostScript** and **SVG Ponoko** are
+  rendered again by Boxes.py with `--format`. DXF, G-code and PLT need `pstoedit`, which is not
+  available in the browser, so they are not offered.
+- Downloads are rendered again rather than saving the preview: the bridge joins the path
+  fragments Boxes leaves behind (parts drawn piece by piece, e.g. TrayLayout's base plate) into
+  one continuous path per contour (`_join_paths`). Same cuts, fewer jumps, and cutter software
+  like Falcon Design Space imports them correctly.
+- **SVG (each part, .zip)**: one SVG per part, moved to the origin and named after the part
+  (`render_parts` in `boxes_bridge.py`). For cutter software that drops a file's groups, so each
+  import is one part with its holes and labels, to be arranged freely.
+- **STL** (for 3D printing the parts instead of cutting them) is made from a separate render with
+  `burn` = 0: the laser's kerf compensation would make printed parts too large. Instead every
+  part is shrunk by half the **print clearance** (default 0.15 mm, kept in localStorage) on each
+  side, so each joint gets that much play in total (`print_parts` in `boxes_bridge.py`, a shapely
+  inset of the outlines). The settings are:
+  - *3D assembly*: the parts that are shown in 3D, at their assembled positions (flex walls bent).
+  - *each part flat, .zip*: one STL per part, lying flat on the bed (z = 0..thickness), unbent.
+  - *single part*: one of these. The part selected in 2D or 3D is preselected.
+
+  Only the outline and holes are extruded. Engravings and the flex-hinge cuts (which are lines,
+  not areas) are not in the STL. STL code lives in `src/stl.ts` (loaded on demand).
 
 ## 3D assembly view
+
+See [3D_PLACEMENT_HOWTO.md](3D_PLACEMENT_HOWTO.md) for a step-by-step tutorial on writing and
+verifying 3D placements for new generators.
 
 - While rendering, `boxes_bridge.py` wraps the wall helpers (`rectangularWall`, `trapezoidWall`,
   `trapezoidSideWall`, `rectangularTriangle`, `flangedWall`, `roundedPlate`, `regularPolygonWall`,
@@ -51,17 +82,17 @@ npm run build    # static site in web/dist/
     stay 2D), `boxes.lids.Lid` (flat, flatbrim, flatfang, overthetop, ontop) and
     `Boxes.surroundingWall` around `roundedPlate`s (any number of wall pieces), and
     `Boxes.polygonWalls` around a `polygonWall` (straight pieces with angled finger joints, rounded
-    corners as flex bends, in any plane). Placed so far (113): ABox, AirPurifier, AngledBox,
+    corners as flex bends, in any plane). Placed so far (118): ABox, AirPurifier, AngledBox,
     BasedBox, BayonetBox, BeeQueenTransportBox, BinTray, BirdHouse, BookHolder, BottleStack,
-    BrickSorter, CardBox, CardHolder, ClosedBox, CoffeeCapsuleHolder, Coffin, CoinBankSafe,
+    BreadBox, BrickSorter, CardBox, CardHolder, ClosedBox, CoffeeCapsuleHolder, Coffin, CoinBankSafe,
     CoinDisplay, CompartmentBox, Console, Crate, Desksign, DiceBox, DiceTower, DinRailBox, DiscRack,
     Dispenser, Display, DisplayCase, DisplayShelf, DividerTray, DoubleFlexDoorBox, DrillBox,
-    DrillStand, ElectronicsBox, EuroRackSkiff, FilamentSpool, FlexBox, FlexBox2, FlexBox3, FlexBox4,
+    DrillStand, ElectronicsBox, EuroRackSkiff, FatBallDispenser, FilamentSpool, FlexBook, FlexBox, FlexBox2, FlexBox3, FlexBox4,
     FlexBox5, GridfinityBase, GridfinityDrillBox, GridfinityTrayLayout, HalfBox, HeartBox, HingeBox,
     HobbyCase, IntegratedHingeBox, KeyHolder, Keypad, LaptopStand, MagazineFile, MakitaPowerSupply,
     Matrix, NightLightBox, NotesHolder, OpenBox, OrganPipe, PaintStorage, PenHolderBox, PhoneHolder,
     PhotoFrame, Rack10Box, Rack19Box, Rack19HalfWidth, RackBox, Ramp, RegularBox, RegularStarBox,
-    RollHolder, RoundedBox, RoundedRegularBox, RoundedTrapezoidBox, SBCMicroRack, Shadowbox,
+    RollHolder, RoundedBox, RoundedRegularBox, RoundedTrapezoidBox, SBCMicroRack, Shadowbox, ShutterBox, SkadisStand,
     SlantedTray, SlidingDrawer, SlidingLidBox, SmallPartsTray, SmallPartsTray2, SpicesRack,
     StackableBin, StorageRack, StorageShelf, Tetris, TrafficLight, TrayInsert, TrayLayout,
     TriangleLamp, TwoPiece, TypeTray, UBox, UnevenHeightBox, UniversalBox, WallCaliper,
@@ -85,7 +116,8 @@ npm run build    # static site in web/dist/
   extrusion is sliced across the arcs and wrapped around them, so the living hinge follows the
   rounded sides it is fitted to.
   Clicking a part in either view, or in the parts list, selects it everywhere. The parts list can
-  hide single parts in 3D (kept while you edit parameters, reset when you switch generators).
+  hide single parts in 3D (kept while you edit parameters, reset when you switch generators);
+  hidden parts are also left out of the STL assembly export.
 - TrayLayout: its `layout` text starts as the full `sx` x `sy` grid and follows them until you
   edit it by hand (`src/layout.ts`, like the server UI's JavaScript); a layout that is still the
   default is left out of the URL. Without a layout, the bridge does the same in Python, since
@@ -121,6 +153,28 @@ npm run build    # static site in web/dist/
   compartment in the walls along x, outer front/back walls optional. This is a change in
   `boxes/generators/traylayout.py` (default `none` draws the same as before), so it carries over
   when converting a TypeTray.
+- TrayLayout also has a `sliding` lid style (`TrayLid` in `boxes/generators/traylayout.py`, not
+  offered by other generators): the back wall is one thickness lower and the front wall one higher,
+  so a two-layer lid slides in over the back wall; the lower layer's tab locks into finger holes
+  in the front wall. Optional magnet holes (`Lid_magnet_diameter`) and a grip slot in the top
+  layer when no handle is chosen.
+- TrayLayout: a size of 0 mm for the first or last row or column makes a liner, a second wall
+  glued flat to the outer wall. It is a plain plate (no finger joints, no holes for it in the
+  floor or side walls), as high as the inner walls and with their finger hole notch. Inner walls
+  meeting it run through to the outer wall, so the liner is split between them and they hold it
+  in place; back/front liners run into the corners, left/right ones end at them. Liners need a
+  floor in front of them. Core change in `boxes/generators/traylayout.py`
+  (`TrayLayout.removeZeroSizes()` takes the 0 mm rows/columns out of the grid before drawing,
+  `liners()` draws the plates; labels keep the layout text's numbering). 0 mm anywhere else is an
+  error. In Edit mode the first and last compartment can be dragged or typed down to 0.
+- TypeTray and TrayLayout have a "Card ramps (3D print)" group (web only, not in core): a wedge
+  per compartment, leaning against the chosen wall (`ramp_side`) and rising from the floor at
+  `ramp_angle` up to `ramp_height` (capped by the wall height and compartment length), so cards
+  slide up and out. TrayLayout compartments along that wall with no wall between them share one
+  ramp; compartments without a floor or without that wall get none. The ramps are extra parts
+  (`Assembly.extra`, helper `printed`, negative `part` index) placed by `placements._card_ramps`:
+  shown in 3D and the parts list, included in the STL exports (shortened by the print clearance
+  to fit between the walls), never in the 2D sheet or SVG downloads.
 - Also in Edit mode, inner walls (TypeTray, TrayLayout) can be dragged: the two compartments on
   either side change, their sum stays. The walls on that grid line move live in 3D (a tip shows
   both sizes); Boxes.py re-renders on release. The compartment before the wall snaps to 1 or 5 mm

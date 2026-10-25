@@ -49,7 +49,7 @@ export type Point2 = [number, number];
  * `startWidth` outside it.
  */
 export interface RecordedPart {
-  /** Index of the `<g id="p-N">` group in the SVG. */
+  /** Index of the `<g id="p-N">` group in the SVG; negative for parts not in it (helper "printed": 3D printed inserts like card ramps). */
   part: number;
   helper: string;
   x: number;
@@ -64,6 +64,8 @@ export interface RecordedPart {
   /** Functions between render() and the helper, innermost first, e.g. ["Lid.__call__"]. */
   callers: string[];
   outline: { outer: Point2[]; holes: Point2[][] } | null;
+  /** Width and height of the cut piece (outline bounds without the burn); null without outline. */
+  size: [number, number] | null;
   /** Where the part goes in the 3D assembly; null if it is shown in 2D only. */
   place: Placement | null;
 }
@@ -154,7 +156,9 @@ export type ArgValues = Record<string, string>;
 export type ToWorker =
   | { type: "init"; wheelBase: string }
   | { type: "schema"; id: number; generator: string }
-  | { type: "render"; id: number; generator: string; args: ArgValues };
+  | { type: "render"; id: number; generator: string; args: ArgValues }
+  | { type: "export"; id: number; generator: string; args: ArgValues; format: string }
+  | { type: "printParts"; id: number; generator: string; args: ArgValues; clearance: number };
 
 export type FromWorker =
   | { type: "status"; text: string }
@@ -172,4 +176,6 @@ export type FromWorker =
       thickness: number;
       ms: number;
     }
+  | { type: "exported"; id: number; content: string }
+  | { type: "printParts"; id: number; parts: RecordedPart[]; thickness: number }
   | { type: "error"; id: number | null; message: string; detail: string };

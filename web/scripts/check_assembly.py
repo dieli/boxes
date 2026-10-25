@@ -46,8 +46,41 @@ _LAYOUT = """ ,> 40mm
 +-+-+-+
 """
 
+# 0 mm edge rows/columns: liners glued to the outer walls (back and left; front and right
+# with a gap in the front liner, a compartment without floor and an inner wall ending at it).
+_LINER_BL = """ ,> 0mm
+ | ,> 50mm
+ | | ,> 40mm
++-+-+-+
+| | | |  0mm
++-+-+-+
+| | | |  60mm
++-+-+-+
+| |   |  30mm
++-+-+-+
+"""
+_LINER_FR = """ ,> 40mm
+ | ,> 60mm
+ | | ,> 30mm
+ | | | ,> 0mm
++-+-+-+-+
+| | | | |  50mm
++-+ +-+-+
+| |   | |  30mm
++-+-+-+-+
+| |X| | |  40mm
++-+ +-+-+
+| | | | |  0mm
++-+-+-+-+
+"""
+
 CASES: dict[str, list[dict]] = {
     "DisplayShelf": [{"sx": "100:150:80"}, {"angle": "-20"}, {"include_back": "1", "include_front": "1", "include_bottom": "1"}, {"front_wall_height": "0"}, {"divider_wall_height": "40"}, {"slope_top": "1"}],
+    "FlexBook": [{"recess_wall": "1"}, {"x": "60", "y": "50", "h": "100", "latchsize": "6"}],
+    "SkadisStand": [{"foot_front": "60"}, {"angle": "90", "connectors": "2:4:6", "foot_front": "40"}],
+    "FatBallDispenser": [{"sides": "5"}, {"sides": "8", "balcony_height": "0"}, {"balcony_height": "35", "roof_height": "60"}],
+    "BreadBox": [{"radius": "30"}, {"x": "250", "h": "140", "radius": "60"}],
+    "ShutterBox": [{"style": "double"}, {"h": "70", "radius": "35"}, {"style": "double", "h": "160", "y": "200"}],
     "BayonetBox": [{"lugs": "6"}, {"diameter": "120", "outside": "0"}],
     "BottleStack": [{"double": "0"}, {"number": "5", "diameter": "60"}],
     "LaptopStand": [{"angle": "8"}, {"l_depth": "300", "angle": "20"}],
@@ -174,12 +207,20 @@ CASES: dict[str, list[dict]] = {
                      {"top_edge": "L"}, {"top_edge": "i"}, {"top_edge": "k"}, {"top_edge": "v"},
                      {"vertical_edges": "finger holes"}, {"bottom_edge": "h"},
                      {"Lid_style": "flatfang"}, {"Lid_style": "overthetop"}],
-    "TypeTray": [{"sx": "30:50:70", "sy": "20:60"}, {"top_edge": "f"}, {"bottom_edge": "e"}],
+    "TypeTray": [{"sx": "30:50:70", "sy": "20:60"}, {"top_edge": "f"}, {"bottom_edge": "e"},
+                 {"ramp": "1"}, {"ramp": "1", "ramp_side": "left", "hi": "15", "ramp_height": "40"}],
     "TrayLayout": [{"sx": "30:50:70", "sy": "20:60"}, {"outside": "0", "hi": "40"},
                    {"hi": "120"}, {"layout": _LAYOUT}, {"layout": _LAYOUT, "outside": "0"},
                    {"Lid_style": "flat"}, {"Lid_style": "overthetop"},
+                   {"Lid_style": "sliding"}, {"Lid_style": "sliding", "outside": "0", "Lid_magnet_diameter": "6"},
                    {"fingerholes": "front-and-back", "sx": "30:50:70"}, {"fingerholes": "inside-only", "layout": _LAYOUT},
-                   {"fingerholes": "front", "hi": "40", "FingerHoleEdge_relative_depth": "0.5"}],
+                   {"fingerholes": "front", "hi": "40", "FingerHoleEdge_relative_depth": "0.5"},
+                   *({"ramp": "1", "ramp_side": s, "layout": _LAYOUT} for s in ("front", "back", "left", "right")),
+                   {"ramp": "1", "ramp_angle": "20", "hi": "10"},
+                   {"layout": _LINER_BL}, {"layout": _LINER_BL, "outside": "0", "fingerholes": "inside-only"},
+                   {"layout": _LINER_FR}, {"layout": _LINER_FR, "Lid_style": "sliding", "hi": "40"},
+                   *({"layout": l, "ramp": "1", "ramp_side": s} for l in (_LINER_BL, _LINER_FR)
+                     for s in ("front", "back", "left", "right"))],
     "ClosedBox": [{"x": "60", "y": "120", "h": "40"}],
     "CardBox": [{"openingdirection": "right"}, {"sx": "40:65", "add_lidtopper": "1"}],
     "DiceBox": [{"lidheight": "25"}],
@@ -219,6 +260,13 @@ EXPECTED = {  # (generator, argument value or None for every case): problems to 
     ("RegularStarBox", "3"): ("cuts into",),
     # sharpcorners: the walls are lengthened for a 22.5 degree bevel ground on by hand
     ("TriangleLamp", "1"): ("cuts into",),
+    # The door is cut for pi r / 2 at the outer radius, longer than its closed path: with its
+    # end on the floor, the handle at its start runs into the fixed top.
+    ("BreadBox", None): ("cuts into #7 (6x",),
+    # The balcony walls are cut to their outer length; their ends are mitred by hand along the
+    # etched lines, so plain slabs overlap at the corners.
+    ("FatBallDispenser", None): ("x23) cuts into #",),
+    ("FatBallDispenser", "35"): ("x38) cuts into #",),
     # Without a back, the inner horizontal walls still have finger joints there.
     ("TrafficLight", "e"): ("edge 0 'f'",),
     # Upstream: the inner frames' bottom edge is F but the bottom has finger holes (fit f), their

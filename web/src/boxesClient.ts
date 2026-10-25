@@ -30,6 +30,17 @@ export interface RenderResult {
   ms: number;
 }
 
+export interface PartFile {
+  part: number;
+  reference: boolean;
+  content: string;
+}
+
+export interface PrintParts {
+  parts: RecordedPart[];
+  thickness: number;
+}
+
 export class BoxesError extends Error {
   constructor(
     message: string,
@@ -73,6 +84,20 @@ export class BoxesClient {
     return this.request((id) => ({ type: "schema", id, generator }));
   }
 
+  exportFormat(generator: string, args: ArgValues, format: string): Promise<string> {
+    return this.request((id) => ({ type: "export", id, generator, args, format }));
+  }
+
+  /** One file per part, `part` being the index of its `<g id="p-N">` in the full SVG. */
+  async exportParts(generator: string, args: ArgValues, format: string): Promise<PartFile[]> {
+    return JSON.parse(await this.exportFormat(generator, args, `${format}-parts`));
+  }
+
+  /** The parts without burn compensation, shrunk for `clearance` mm of play per joint (for STL). */
+  printParts(generator: string, args: ArgValues, clearance: number): Promise<PrintParts> {
+    return this.request((id) => ({ type: "printParts", id, generator, args, clearance }));
+  }
+
   render(generator: string, args: ArgValues): Promise<RenderResult | null> {
     return new Promise((resolve, reject) => {
       this.queued?.resolve(null);
@@ -109,6 +134,8 @@ export class BoxesClient {
     this.pending.delete(msg.id);
     if (msg.type === "error") p.reject(new BoxesError(msg.message, msg.detail));
     else if (msg.type === "schema") p.resolve(msg.schema);
+    else if (msg.type === "exported") p.resolve(msg.content);
+    else if (msg.type === "printParts") p.resolve({ parts: msg.parts, thickness: msg.thickness });
     else {
       const { svg, parts, assembly, dims, handles, lines, thickness, ms } = msg;
       p.resolve({ svg, parts, assembly, dims, handles, lines, thickness, ms });

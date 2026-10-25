@@ -152,6 +152,18 @@ class Assembly:
         self.dims: list[dict] = []
         self.handles: list[dict] = []
         self.lines: list[dict] = []
+        self.extras: list[Part] = []
+
+    def extra(self, label: str, outline: list[tuple[float, float]]) -> Part:
+        """A part that is not in the 2D sheet (e.g. a 3D printed insert) with the given outline
+        in local coordinates. Place it like any other part; give the extrusion as thickness."""
+        rec = {"part": -1 - len(self.extras), "helper": "printed",
+               "x": max(p[0] for p in outline), "y": max(p[1] for p in outline),
+               "edges": [], "label": label, "move": "", "matrix": [0.0] * 6, "mirrored": False,
+               "callers": [], "outline": {"outer": [list(p) for p in outline], "holes": []}}
+        part = Part(len(self.parts) + len(self.extras), rec)
+        self.extras.append(part)
+        return part
 
     def place(self, part: Part | None, origin: Vec, u: Vec, v: Vec, n: Vec,
               rot: int = 0, flip: bool = False, name: str = "",

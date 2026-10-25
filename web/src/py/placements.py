@@ -129,6 +129,9 @@ def _lid(a: Assembly, f: BoxFrame) -> None:
         lf.back(parts.label("lid back"))
         lf.left(parts.label("lid left"))
         lf.right(parts.label("lid right"))
+    elif style == "sliding":
+        f.plate(parts.label("lid bottom"), h - t, x0=bs, y0=-t)
+        f.plate(parts.label("lid top"), h)
     # "chest" sides are not drawn with rectangularWall, so they are not recorded yet.
 
 
@@ -199,6 +202,42 @@ def type_tray(a: Assembly) -> None:
     for k, x0 in enumerate(positions(b.sx, t), 1):
         f.inner_y(p.label(f"inner y {k}"), x0, flip=True)
     place_lids(a, f, b.top_edge)
+    # Compartment (i, j): sx[i] from the left, sy[j] from the back.
+    cx = [0.0] + [x0 + t for x0 in positions(b.sx, t)]
+    cy = [y] + [y - y0 - t for y0 in positions(b.sy, t)]
+    lx, ly = len(b.sx), len(b.sy)
+    outer = {"front": lambda i, j: j == ly - 1, "back": lambda i, j: j == 0,
+             "left": lambda i, j: i == 0, "right": lambda i, j: i == lx - 1}
+    side = (getattr(b, "_web_ramp", None) or {}).get("side", "front")
+    _card_ramps(a, [(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j],
+                     b.h if outer[side](i, j) else (b.hi or b.h))
+                    for j in range(ly) for i in range(lx)])
+
+
+def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float]]) -> None:
+    """Printed wedges so cards slide up and out, when the user turned them on (box._web_ramp:
+    side, height, angle; see boxes_bridge). cells: (x0, x1, y0, y1, wall height) of each
+    compartment with a floor and a wall on the ramp side. A ramp fills the compartment's width,
+    leans against that wall and rises from the floor at the given angle."""
+    r = getattr(a.box, "_web_ramp", None)
+    if not r:
+        return
+    side = r["side"]
+    tan = math.tan(math.radians(min(max(r["angle"], 5.0), 85.0)))
+    for k, (x0, x1, y0, y1, wall) in enumerate(cells, 1):
+        along_y = side in ("front", "back")
+        depth, width = (y1 - y0, x1 - x0) if along_y else (x1 - x0, y1 - y0)
+        h = min(r["height"], wall)
+        length = h / tan
+        if length > depth:
+            length, h = depth, depth * tan
+        if h < 0.1 or width < 0.1:
+            continue
+        # Local x runs from the wall into the compartment, y up; extruded across the width.
+        origin, u, n = {"front": ((x0, y0, 0.0), Y, X), "back": ((x1, y1, 0.0), neg(Y), neg(X)),
+                        "left": ((x0, y1, 0.0), X, neg(Y)), "right": ((x1, y0, 0.0), neg(X), Y)}[side]
+        a.place(a.extra(f"card ramp {k}", [(0.0, 0.0), (length, 0.0), (0.0, h)]),
+                origin, u, Z, n, thickness=width)
 
 
 # --- Card and dice boxes --------------------------------------------------------------
@@ -1477,20 +1516,37 @@ def _tray_layout(a: Assembly, editable: bool) -> None:
         ys[j] = ys[j + 1] + t + sy[j]
     x, y = xs[-1], ys[0]
     f = a.frame(x, y, b.h)
-    walls = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.walls"))
+    # Grid indices -> layout text indices (they differ with 0 mm rows/columns at the edges).
+    ci, ri = b.colIndex, b.rowIndex
+    xl, yl = b.xLineIndex, b.yLineIndex
+    # Liners (0 mm edge rows/columns, see TrayLayout.removeZeroSizes) against the outer walls'
+    # inner faces; drawn by liners(), which walls() calls at the end.
+    liners = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.liners"))
+    for p in getattr(b, "liner_pieces", []):
+        s, side = p["start"], p["side"]
+        if side in ("back", "front"):
+            line = yl(0) + 1 if side == "back" else yl(ly) - 1
+            a.place(next(liners, None), (xs[s] + t, ys[0] if side == "back" else t, 0.0),
+                    X, Z, neg(Y), name=f"liner x {ci(s) + 1}/{line + 1}")
+        else:
+            line = xl(0) + 1 if side == "left" else xl(lx) - 1
+            a.place(next(liners, None), (t if side == "left" else xs[lx], ys[s] - (t if p["cut0"] else 0.0), 0.0),
+                    neg(Y), Z, neg(X), name=f"liner y {line + 1}/{ri(s) + 1}")
+    walls = iter(_helper(a.parts, "rectangularWall").drawn_by("TrayLayout.walls").not_drawn_by("TrayLayout.liners"))
     for j in range(ly + 1):
         for start, end in _runs(b.hwalls[j][:lx]):
             a.place(next(walls, None), (xs[start] + t, ys[j] + t, 0.0), X, Z, neg(Y),
-                    name=f"wall x {start + 1}/{j + 1}")
+                    name=f"wall x {ci(start) + 1}/{yl(j) + 1}")
     for i in range(lx + 1):
         for start, end in _runs([row[i] for row in b.vwalls[:ly]]):
             a.place(next(walls, None), (xs[i] + t, ys[start], 0.0), neg(Y), Z, neg(X),
-                    name=f"wall y {i + 1}/{start + 1}")
+                    name=f"wall y {xl(i) + 1}/{ri(start) + 1}")
     # The base plate is drawn from above with a margin of the F edge's width.
     w = b.edges["F"].startWidth()
     a.place(_helper(a.parts, "free").drawn_by("TrayLayout.base_plate").first(),
             (-w, -w, -t), X, Y, Z, name="bottom")
     place_lids(a, f, None)
+    _card_ramps(a, _tray_ramp_cells(b, xs, ys))
     if not editable:
         return
     f.dims(h="h")
@@ -1500,19 +1556,106 @@ def _tray_layout(a: Assembly, editable: bool) -> None:
     f.chain("layout", "x", given.x, label="x", axis="x")
     f.chain("layout", "-y", given.y, label="y", axis="y")
     _inner_height(f, xs[1:-1], ys[1:-1], b.hi)
-    f.walls("layout", "x", xs[1:-1], given.x, sx, b.hi, label="x", axis="x")
-    f.walls("layout", "-y", ys[1:-1], given.y, sy, b.hi, label="y", axis="y")
+    # Draggable lines of the layout's grid, including the 0 mm rows/columns.
+    lsx, lsy = getattr(b, "layout_x", sx), getattr(b, "layout_y", sy)
+    oxs = [-t]
+    for s in lsx:
+        oxs.append(oxs[-1] + t + s)
+    oys = [-t] * (len(lsy) + 1)
+    for j in range(len(lsy) - 1, -1, -1):
+        oys[j] = oys[j + 1] + t + lsy[j]
+    f.walls("layout", "x", oxs[1:-1], given.x, lsx, b.hi, label="x", axis="x")
+    f.walls("layout", "-y", oys[1:-1], given.y, lsy, b.hi, label="y", axis="y")
     # Editable in 3D: every wall piece of the grid and every floor cell.
+    sliding = getattr(getattr(b, "lidSettings", None), "style", None) == "sliding"
     for j in range(ly + 1):
-        h = b.h if j in (0, ly) else b.hi
+        h = (b.h + t if sliding else b.h) if j == 0 else ((b.h - t if sliding else b.h) if j == ly else b.hi)
         for i in range(lx):
-            a.handle("hwall", i, j, b.hwalls[j][i], (xs[i] + t, ys[j], 0.0), (xs[i + 1], ys[j] + t, h))
+            a.handle("hwall", ci(i), yl(j), b.hwalls[j][i], (xs[i] + t, ys[j], 0.0), (xs[i + 1], ys[j] + t, h))
     for j in range(ly):
         for i in range(lx + 1):
             h = b.h if i in (0, lx) else b.hi
-            a.handle("vwall", i, j, b.vwalls[j][i], (xs[i], ys[j + 1] + t, 0.0), (xs[i] + t, ys[j], h))
+            a.handle("vwall", xl(i), ri(j), b.vwalls[j][i], (xs[i], ys[j + 1] + t, 0.0), (xs[i] + t, ys[j], h))
         for i in range(lx):
-            a.handle("floor", i, j, b.floors[j][i], (xs[i] + t, ys[j + 1] + t, -t), (xs[i + 1], ys[j], 0.0))
+            a.handle("floor", ci(i), ri(j), b.floors[j][i], (xs[i] + t, ys[j + 1] + t, -t), (xs[i + 1], ys[j], 0.0))
+    # Liner pieces, as written in the layout (on the line next to the outer one).
+    zs = getattr(b, "zero_sizes", {"x": (0, 0), "y": (0, 0)})
+    for side, on in (("back", zs["y"][0]), ("front", zs["y"][1])):
+        if not on:
+            continue
+        line = yl(0) + 1 if side == "back" else yl(ly) - 1
+        y0 = ys[0] - t if side == "back" else 0.0
+        for i in range(lx):
+            a.handle("hwall", ci(i), line, given.hwalls[line][ci(i)], (xs[i] + t, y0, 0.0), (xs[i + 1], y0 + t, b.hi))
+    for side, on in (("left", zs["x"][0]), ("right", zs["x"][1])):
+        if not on:
+            continue
+        line = xl(0) + 1 if side == "left" else xl(lx) - 1
+        x0 = 0.0 if side == "left" else xs[lx] - t
+        for j in range(ly):
+            a.handle("vwall", line, ri(j), given.vwalls[ri(j)][line], (x0, ys[j + 1] + t, 0.0), (x0 + t, ys[j], b.hi))
+
+
+def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
+    """Ramp cells (see _card_ramps) of a TrayLayout grid: compartments with a floor and a wall on
+    the ramp side; neighbours along that wall with no wall between them share one ramp."""
+    r = getattr(b, "_web_ramp", None)
+    if not r:
+        return []
+    t = b.thickness
+    lx, ly = len(b.x), len(b.y)
+    hi = b.hi or b.h
+    liner = getattr(b, "liner", {})
+
+    def has(side: str, k: int) -> bool:
+        return bool(liner.get(side) and liner[side][k])
+
+    def cell(i: int, j: int) -> tuple[float, float, float, float]:
+        """Free floor of compartment (i, j): without the liners standing in it."""
+        return (xs[i] + t + (t if i == 0 and has("left", j) else 0.0),
+                xs[i + 1] - (t if i == lx - 1 and has("right", j) else 0.0),
+                ys[j + 1] + t + (t if j == ly - 1 and has("front", i) else 0.0),
+                ys[j] - (t if j == 0 and has("back", i) else 0.0))
+
+    def run(first, last) -> tuple[float, float, float, float]:
+        a, b_ = cell(*first), cell(*last)
+        if r["side"] in ("front", "back"):  # along x: shared y range
+            return a[0], b_[1], max(a[2], b_[2]), min(a[3], b_[3])
+        return max(a[0], b_[0]), min(a[1], b_[1]), b_[2], a[3]
+
+    cells = []
+    if r["side"] in ("front", "back"):
+        line = (lambda j: j + 1) if r["side"] == "front" else (lambda j: j)
+        for j in range(ly):
+            ok = [b.floors[j][i] and b.hwalls[line(j)][i] for i in range(lx)]
+            # A liner on the outer wall is only as high as the inner walls.
+            wall = b.h if line(j) in (0, ly) and not any(has(r["side"], k) for k in range(lx)) else hi
+            i = 0
+            while i < lx:
+                if not ok[i]:
+                    i += 1
+                    continue
+                e = i + 1
+                while e < lx and ok[e] and not b.vwalls[j][e] and cell(e, j)[2:] == cell(i, j)[2:]:
+                    e += 1
+                cells.append((*run((i, j), (e - 1, j)), wall))
+                i = e
+    else:
+        line = (lambda i: i) if r["side"] == "left" else (lambda i: i + 1)
+        for i in range(lx):
+            ok = [b.floors[j][i] and b.vwalls[j][line(i)] for j in range(ly)]
+            wall = b.h if line(i) in (0, lx) and not any(has(r["side"], k) for k in range(ly)) else hi
+            j = 0
+            while j < ly:
+                if not ok[j]:
+                    j += 1
+                    continue
+                e = j + 1
+                while e < ly and ok[e] and not b.hwalls[e][i] and cell(i, e)[:2] == cell(i, j)[:2]:
+                    e += 1
+                cells.append((*run((i, j), (i, e - 1)), wall))
+                j = e
+    return cells
 
 
 def _inner_height(f, xs: list[float], ys: list[float], hi: float) -> None:
@@ -3409,3 +3552,300 @@ def bayonet_box(a: Assembly) -> None:
     for k, key in enumerate(sorted(layers)):
         for q in layers[key]:
             _disc(a, q, k * t, "lid" if k == 4 else "")
+
+
+def _yz(y: float, z: float) -> tuple:
+    return (0.0, y, z)
+
+
+@placement("ShutterBox")
+def shutter_box(a: Assembly) -> None:
+    """Width x along X, depth y along Y (front at 0), the sides drawn bottom down with the
+    rounded top corner(s) at the back (and front with style double). The shutter runs in a
+    1.5t track at radius r - 1.5t .. r: rails on the sides' inner faces at the top, the
+    panels (inner face at radius r - 2.5t) down the back (front), around the bottom
+    corner(s), where the corner fillers are the outer guide, and along under a false floor.
+    The door lies closed: from the front (top of the front wall) over the top and down."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, l, h = b.x, b.y, b.h
+    r = b.radius
+    double = b.style == "double"
+    n = b.n
+    s = b.spacing
+
+    def by(name):
+        return [q for q in _helper(p, "free") if any(c.endswith("." + name) for c in q.rec["callers"])]
+
+    def min_y(q):
+        return min(pt[1] for pt in q.rec["outline"]["outer"])
+
+    walls = list(_helper(p, "rectangularWall"))
+    sides = by("side")
+    if len(walls) < 5 or len(sides) < 2:
+        return
+    front, back, bottom, handle, panels = walls[0], walls[1], walls[2], walls[3], walls[4:]
+
+    def on_side(q, right: bool, o, u, v, name=""):
+        """Glues a flat piece to a side's inner face; (o, u, v) map its frame to (y, z)."""
+        nx = u[1] * v[2] - u[2] * v[1]
+        x0 = (x - t if nx > 0 else x) if right else (0.0 if nx > 0 else t)
+        a.place(q, (x0, o[1], o[2]), u, v, (nx, 0.0, 0.0), name=name)
+
+    for q, x0 in zip(sides, (-t, x)):
+        a.place(q, (x0, -t, -t), Y, Z, X, name="side")
+    a.place(bottom, (0.0, 0.0, 0.0), Y, X, neg(Z), name="bottom")
+    a.place(front, (0.0, 0.0, 0.0), X, Z, neg(Y), name="front")
+    a.place(back, (x, l, 0.0), neg(X), Z, Y, name="back")
+
+    # Panels: straight pieces and chords of the bottom corners, front to back.
+    rho, ang = r - 2.5 * t, 90.0 / n
+    segs = []
+
+    def chords(cy, th0):
+        for k in range(n):
+            t0, t1 = math.radians(th0 + k * ang), math.radians(th0 + (k + 1) * ang)
+            p0 = (cy + rho * math.cos(t0), r + rho * math.sin(t0))
+            p1 = (cy + rho * math.cos(t1), r + rho * math.sin(t1))
+            d = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            segs.append((p0, ((p1[0] - p0[0]) / d, (p1[1] - p0[1]) / d)))
+
+    vert = h - 2 * r > 2 * t
+    if double:
+        if vert:
+            segs.append(((2.5 * t, h - r), (0.0, -1.0)))
+        chords(r, 180.0)
+        segs.append(((r, 2.5 * t), (1.0, 0.0)))
+    else:
+        segs.append(((0.0, 2.5 * t), (1.0, 0.0)))
+    chords(l - r, 270.0)
+    if vert:
+        segs.append(((l - 2.5 * t, r), (0.0, 1.0)))
+    for q, ((py, pz), (dy, dz)) in zip(panels, segs):
+        a.place(q, (0.0, py, pz), (0.0, dy, dz), X, (0.0, dz, -dy), name="panel")
+
+    # Corner fillers: square corner in the box corner, concave arc of radius r.
+    fill = sorted(by("cornerRadius"), key=lambda q: (q.rec["matrix"][2], min_y(q)))
+    corners = [(l - r, l, Y)] if not double else [(r, 0.0, neg(Y)), (l - r, l, Y)]
+    for k, (y1, y2, u1) in enumerate(corners):
+        pair = fill[2 * k:2 * k + 2]
+        if len(pair) == 2:
+            on_side(pair[0], False, _yz(y1, 0.0), u1, Z, "corner")
+            on_side(pair[1], True, _yz(y2, r + s), neg(u1), neg(Z), "corner")
+
+    # Rails: outer r .. r + t and inner r - 2.5t .. r - 1.5t, their outer edge drawn at y = 0.
+    rails = sorted(by("rails2" if double else "rails"), key=min_y)
+    if double:
+        orgs = [(r + t, 0.0), (r + t, 1.5 * t), (r + t, r + 1.5 * t), (r + t, r + 3 * t)]
+        kinds = [(False, True), (False, False), (True, True), (True, False)]
+        u0 = r
+    else:
+        orgs = [(2.5 * t + s, 0.0), (1.5 * t, t + s), (2 * t, 2 * t + 2 * s), (t - s, 3 * t + 3 * s)]
+        kinds = [(False, True), (True, True), (False, False), (True, False)]
+        u0 = 0.0
+    for q, (ox, oy), (right, outer) in zip(rails, orgs, kinds):
+        z0 = (h + t if outer else h - 1.5 * t) + oy
+        on_side(q, right, _yz(u0 - ox, z0), Y, neg(Z), "rail")
+
+    # Door: inner face on the inner guides (radius r - 1.5t), bent around each corner.
+    door = next(iter(by("door")), None)
+    rd = r - 1.5 * t
+    st = b.edges["X"].settings.stretch
+    arc = math.pi / 2 * rd / st
+    if double:
+        bends = [(0.0, 90, rd, st), (arc + l - 2 * r, 90, rd, st),
+                 (2 * arc + l - 2 * r + h - 2 * r, 90, rd, st)]
+        a.place(door, (x - 0.1 * t, 1.5 * t, h - r), Z, neg(X), neg(Y), name="door", bend=bends)
+        a.place(handle, (1.1 * t, 0.5 * t, h - r + 0.5 * t), neg(Y), X, Z, name="handle")
+    else:
+        bends = [(l - r, 90, rd, st), (l - r + arc + h - 2 * r, 90, rd, st)]
+        a.place(door, (x - 0.1 * t, 0.0, h - 1.5 * t), Y, neg(X), Z, name="door", bend=bends)
+        a.place(handle, (1.1 * t, 0.5 * t, h - 0.5 * t), Z, X, Y, name="handle")
+
+
+@placement("BreadBox")
+def bread_box(a: Assembly) -> None:
+    """Length x along X, depth y along Y between the two sides, height h. Fixed top over the
+    left half, the shutter in a 1.5t track (radius r - 1.5t .. r) over the right half and
+    down the open right end; open, it slides back under the top and down the left end wall
+    along the inner panels. The door lies closed, its lower end on the floor."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h, r, n, s = b.x, b.y, b.h, b.radius, b.n, b.spacing
+
+    def by(name):
+        return [q for q in _helper(p, "free") if any(c.endswith("." + name) for c in q.rec["callers"])]
+
+    def min_y(q):
+        return min(pt[1] for pt in q.rec["outline"]["outer"])
+
+    walls = list(_helper(p, "rectangularWall"))
+    sides = by("side")
+    if len(walls) < 5 or len(sides) < 2:
+        return
+    end, bottom, top, handle, panels = walls[0], walls[1], walls[2], walls[3], walls[4:]
+
+    def on_side(q, back: bool, o, u, v, name="", flip=False):
+        """Glues a flat piece to a side's inner face; (o, u, v) map its frame to (x, z)."""
+        ny = u[2] * v[0] - u[0] * v[2]
+        y0 = (y - t if ny > 0 else y) if back else (0.0 if ny > 0 else t)
+        a.place(q, (o[0], y0, o[2]), u, v, (0.0, ny, 0.0), name=name, flip=flip)
+
+    for q, y0 in zip(sides, (0.0, y + t)):
+        a.place(q, (-t, y0, -t), X, Z, neg(Y), name="side")
+    a.place(end, (0.0, y, 0.0), neg(Y), Z, neg(X), name="end")
+    a.place(bottom, (0.0, y, 0.0), X, neg(Y), neg(Z), name="bottom")
+    a.place(top, (0.0, 0.0, h), X, Y, Z, name="top")
+
+    # Inner panels (inner face at radius r - 2.5t around the top left corner).
+    rho, ang = r - 2.5 * t, 90.0 / n
+    segs = [((2.5 * t, 0.0), (0.0, 1.0))]
+    for k in range(n):
+        t0, t1 = math.radians(180 - k * ang), math.radians(180 - (k + 1) * ang)
+        p0 = (r + rho * math.cos(t0), h - r + rho * math.sin(t0))
+        p1 = (r + rho * math.cos(t1), h - r + rho * math.sin(t1))
+        d = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+        segs.append((p0, ((p1[0] - p0[0]) / d, (p1[1] - p0[1]) / d)))
+    segs.append(((r, h - 2.5 * t), (1.0, 0.0)))
+    for q, ((px, pz), (dx, dz)) in zip(panels, segs):
+        a.place(q, (px, 0.0, pz), (dx, 0.0, dz), Y, (-dz, 0.0, dx), name="panel")
+
+    # Corner fillers in the top left corner: outer guide of radius r.
+    fill = sorted(by("cornerRadius"), key=min_y)
+    if len(fill) == 2:
+        on_side(fill[0], False, (r, 0.0, h), neg(X), neg(Z), "corner")
+        on_side(fill[1], True, (0.0, 0.0, h - r - s), X, Z, "corner")
+
+    # Rails (drawn mirrored): outer edge at y = 0, starting at x / 2 on top.
+    rails = sorted(by("rails"), key=min_y)
+    orgs = [(2.5 * t + s, 0.0), (1.5 * t, t + s), (2.5 * t - s, 2 * t + 2 * s), (1.5 * t - 2 * s, 3 * t + 3 * s)]
+    kinds = [(False, True), (True, True), (False, False), (True, False)]
+    for q, (ox, oy), (back, outer) in zip(rails, orgs, kinds):
+        z0 = (h + t if outer else h - 1.5 * t) + oy
+        on_side(q, back, (x / 2 - ox, 0.0, z0), X, neg(Z), "rail", flip=True)
+
+    # Door: inner face on the inner rails; cut longer than the closed path, so its start
+    # goes under the top until the lower end stands on the floor.
+    door = next(iter(by("door")), None)
+    if door is None:
+        return
+    rd = r - 1.5 * t
+    st = b.edges["X"].settings.stretch
+    arc = math.pi / 2 * rd / st
+    x0 = x / 2 - max(0.0, door.x - (x / 2 - r) - arc - (h - r))
+    a.place(door, (x0, 0.1 * t, h - 1.5 * t), X, Y, Z, name="door", bend=[(x - r - x0, 90, rd, st)])
+    a.place(handle, (x0 + 1.5 * t, 1.1 * t, h - 0.5 * t), Z, Y, neg(X), name="handle")
+
+
+@placement("FatBallDispenser")
+def fat_ball_dispenser(a: Assembly) -> None:
+    """Polygons centred on the z axis, first side at the front. Cage: floor z [0, t] with
+    the balcony walls on its outer band, the ceiling on the (undrawn) poles at 2.5 ball
+    diameters. Roof: the bracket under the ceiling's rim, the spacer around the ceiling, the
+    roof base plate on top, the tiles as a pyramid on it (lower faces on the pyramid; their
+    hips and the walls' corners are chamfered by hand) and the support plate inside under
+    the tip."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    polys = list(_helper(p, "regularPolygonWall"))
+
+    def by(name):
+        return [q for q in _helper(p, "free") if any(c.endswith("." + name) for c in q.rec["callers"])]
+
+    if len(polys) < 3:
+        return
+    n = b.sides
+    ceiling, roof, floor = polys[0], polys[1], polys[2]
+    support = polys[3] if len(polys) > 3 else None
+    # Same radii as render().
+    ar_base = math.radians((180 - 360 / n) / 2)
+    r_clearance = b.pole_clearance / math.sin(ar_base)
+    r_pole = b.pole_diameter / 2
+    r_poles = b.ball_diameter / 2 + max(r_pole, r_clearance) + r_pole
+    r_ceiling = r_poles + r_pole + max(r_clearance, r_pole)
+    r_outer = r_ceiling + b.slide_clearance + b.spacer_width
+    _, h_outer, l_outer = b.regularPolygon(n, radius=r_outer)
+
+    _polygon_plate(a, floor, 0.0, name="floor")
+    fp = floor.rec["params"]
+    pad = t * math.tan(math.radians(180 / n))
+    for q, ((px, py), (dx, dy), _) in zip(by("balcony_wall"),
+                                         _polygon_segments([fp["side"], 360 / n] * n, (-fp["side"] / 2, -fp["h"]))):
+        a.place(q, (px - dx * pad, py - dy * pad, 0.0), (dx, dy, 0.0), Z, (dy, -dx, 0.0), name="balcony")
+
+    zc = 2.5 * b.ball_diameter
+    _polygon_plate(a, ceiling, zc, name="ceiling")
+    locks = by("lock_part")
+    for q, z0, name in zip(locks, (zc, zc - t), ("spacer", "bracket")):
+        a.place(q, (-l_outer / 2, -h_outer, z0), X, Y, Z, name=name)
+    zr = zc + 2 * t
+    _polygon_plate(a, roof, zc + t, name="roof base")
+
+    rp = roof.rec["params"]
+    hf, hr = rp["h"], b.roof_height
+    slant = math.hypot(hf, hr)
+    cf, sf = hf / slant, hr / slant
+    for q, ((px, py), (dx, dy), _) in zip(by("roof_tile"),
+                                         _polygon_segments([rp["side"], 360 / n] * n, (-rp["side"] / 2, -hf))):
+        nh = (dy, -dx, 0.0)
+        v = (-cf * nh[0], -cf * nh[1], sf)
+        a.place(q, (px, py, zr), (dx, dy, 0.0), v, (sf * nh[0], sf * nh[1], cf), name="roof tile")
+    if support is not None:
+        hs = support.rec["params"]["h"]
+        _polygon_plate(a, support, zr + hr * (1 - hs / hf) - t, name="roof support")
+
+
+@placement("SkadisStand")
+def skadis_stand(a: Assembly) -> None:
+    """One side piece (the generator draws one; a board stands on two) in the XZ plane, the
+    foot along +X; with foot_front, the plate under it with the finger holes along its foot."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    walls = list(_helper(p, "polygonWall"))
+    if not walls:
+        return
+    sx0, sy0 = walls[0].rec["params"]["start"]  # the foot starts here (a vertical board leans past it)
+    a.place(walls[0], (-sx0, t, -sy0), X, Z, (0, -1, 0), name="side")
+    plates = list(_helper(p, "roundedPlate"))
+    if plates and b.foot_front:
+        w = max(b.foot / 10, t)
+        # roundedPlate runs its callback from (r, 0), so the holes start at foot_front.
+        a.place(plates[0], (-b.foot_front, t / 2 - w, -t), X, Y, Z, name="foot")
+
+
+@placement("FlexBook")
+def flex_book(a: Assembly) -> None:
+    """Lying open side down: X from the fore edge to the spine, Y along the book's height (the
+    generator's h), Z up, the inside x by y by h (render() swaps y and h). The front cover is
+    the floor (inner face z = 0), the two D-shaped sides and the latch wall stand in its
+    finger holes, the flex spine wraps the sides' half circles and the back cover closes on
+    top, the latch tab through its slot. Latch brackets and pin stay 2D."""
+    b = a.box
+    t = a.t
+    p = a.parts
+    x, y, h = b.x, b.y, b.h  # after render(): h is the book's thickness, y its height
+    r = b.radius
+
+    def by(name):
+        return [q for q in _helper(p, "free") if any(c.endswith("." + name) for c in q.rec["callers"])]
+
+    covers, sides = by("flexBookCover"), by("flexBookSide")
+    if covers:
+        # The flex is cut 2 c4 + t long (+t "to make it fit"): it wraps the half circle at
+        # the inner face, so the back cover's latch slot lands over the latch.
+        st = math.pi * r / (math.pi * r + t)
+        a.place(covers[0], (0.0, y + 4 * t, 0.0), X, neg(Y), neg(Z), name="cover",
+                bend=[(x + 3 * t, 180, r, st)])
+    # Side: its x runs down from the back cover (x = 0) to the floor, its y from the latch
+    # wall's outer face to the spine; the mirrored one is the same piece turned over.
+    for q, y0 in zip(sides, (2 * t, y + 3 * t)):
+        a.place(q, (t, y0, h), neg(Z), X, neg(Y), flip=q.mirrored, name="side")
+    for q in by("flexBookLatchWall"):
+        x_adjust = 0 if b.recess_wall else 3 * t
+        a.place(q, (t, t, h + x_adjust), neg(Z), Y, X, name="latch wall")
+    for q in by("flexBookRecessedWall"):
+        a.place(q, (x + 2 * t, t, h), neg(Z), Y, X, flip=q.mirrored, name="inner wall")
