@@ -92,14 +92,22 @@ def build_holes(*args: str):
         return hole(x, y, *a, **kw)
 
     def rect_hole_(x, y, dx, dy, *a, **kw):
-        note("rect", x, y)
+        note("rect", x, y, dx=dx, dy=dy)
         return rect_hole(x, y, dx, dy, *a, **kw)
 
     def finger_holes_(x, y, length, angle=90, **kw):
         note("finger", x, y, length=length, angle=angle)
         return finger_holes(x, y, length, angle, **kw)
 
+    lock_holes = getattr(box.lid, "lockHoles", None)
+
+    def lock_holes_(x, y, length):
+        note("finger", x, y, length=length, angle=0)
+        return lock_holes(x, y, length)
+
     box.rectangularWall, box.hole = record, hole_
+    if lock_holes:
+        box.lid.lockHoles = lock_holes_
     box.rectangularHole, box.fingerHolesAt = rect_hole_, finger_holes_
     box.render()
     box.close()
@@ -329,3 +337,31 @@ def test_sliding_lid_fingers_match_the_back_wall_holes():
     assert run == pytest.approx((start + bs, 60 + t + 30 - 2 * bs))
     # The lower layer's back edge, from the left in tray coordinates.
     assert [(s + bs, l) for s, l in box.lid.back_runs] == [pytest.approx(run)]
+
+
+@pytest.mark.parametrize("fingers", [1, 2, 3])
+def test_sliding_lid_locks_with_few_fingers_in_wider_holes(fingers):
+    t = 3.0
+    layout = grid([40, 60, 30], [50, 40]).replace("+-+-+-+\n", "+ +-+-+\n", 1)
+    box, holes = build_holes("--h=50", "--Lid_style=sliding", f"--Lid_lock_fingers={fingers}",
+                             "--Lid_lock_play=0.6", "--layout=" + layout)
+    (run,) = [h for h in holes if h["kind"] == "finger" and h["angle"] == 0]
+    slots = [h for h in holes if h["kind"] == "rect" and h["label"] == run["label"]
+             and h["y"] == pytest.approx(run["y"])]
+    assert len(slots) == fingers
+    f = box.edges["f"].settings.finger
+    assert all(h["dx"] == pytest.approx(f + 0.6) and h["dy"] == pytest.approx(t + 0.6) for h in slots)
+    # Spread evenly: a space between the slots, half a space at each end.
+    space = (run["length"] - fingers * f) / fingers
+    xs = sorted(h["x"] - run["x"] for h in slots)
+    assert xs == pytest.approx([space / 2 + f / 2 + i * (space + f) for i in range(fingers)])
+    # The lid's back edge has as many fingers.
+    edge = box.lid.lockEdge(run["length"])
+    assert edge.calcFingers(run["length"], None)[0] == fingers
+
+
+def test_sliding_lid_lock_fingers_fit_short_runs():
+    box, _ = build("--h=50", "--Lid_style=sliding", "--Lid_lock_fingers=10", "--layout=" + grid([20], [50]))
+    f = box.edges["f"].settings.finger
+    edge = box.lid.lockEdge(20.0)
+    assert edge.calcFingers(20.0, None)[0] == int(20 // (2 * f))

@@ -35,6 +35,8 @@ Values:
  * handle : "none" : type of handle
  * brim_spacing : 0.1 : space between the brim and the walls in mm (for flat* and sliding lids)
  * magnet_diameter : 0.0 : diameter of magnet holes in mm (sliding lid only; 0 to disable)
+ * lock_fingers : 2 : fingers of the sliding lid per back wall piece, locking into its holes
+ * lock_play : 0.5 : extra room in mm in the back wall's holes for the sliding lid's fingers
 
 * relative (in multiples of thickness)
 
@@ -50,13 +52,16 @@ Values:
         **lids.LidSettings.absolute_params,
         "style": tuple(dict.fromkeys(lids.LidSettings.absolute_params["style"] + ("sliding",))),
         "magnet_diameter": 0.0,
+        "lock_fingers": 2,
+        "lock_play": 0.5,
     }
 
 
 class TrayLid(lids.Lid):
     """Lid with an additional "sliding" style that only works with TrayLayout:
     the front wall is lowered by one thickness so a two layer lid can slide in
-    over it; the lower layer locks into finger holes in the raised back wall.
+    over it; the lower layer locks into finger holes in the raised back wall: lock_fingers
+    fingers per back wall piece, spread evenly, in holes lock_play wider than them.
 
     Both layers span from the outside of the front wall to the back wall; the lower one fits
     between the side walls (brim_spacing play on each side), the upper one covers them. A handle
@@ -107,7 +112,7 @@ class TrayLid(lids.Lid):
             elif grip:
                 self.rectangularHole(x / 2, 2 * t, grip_w, t, r=t / 2)
 
-        back: str | boxes.edges.BaseEdge = "f"
+        back: str | boxes.edges.BaseEdge = self.lockEdge(w_bot)
         if self.back_runs is not None:
             back = self.backEdge(w_bot, self.back_runs)
         self.rectangularWall(w_bot, l_bot, ["e", "e", back, "e"], callback=[bottomCB],
@@ -116,6 +121,27 @@ class TrayLid(lids.Lid):
                              move="up", label="lid top")
         self.handleParts(x, y)
         return True
+
+    def lockSettings(self, length: float) -> boxes.edges.FingerJointSettings:
+        """Finger joint settings for a back wall run `length` long: lock_fingers fingers as
+        wide as the box's finger joints (fewer if they do not fit), spread evenly, and
+        lock_play as the play of their holes."""
+        fs = self.edges["f"].settings
+        f = fs.finger
+        n = max(1, min(int(self.settings.lock_fingers), int(length // (2 * f))))
+        values = dict(fs.values)
+        # surroundingspaces just under 1: calcFingers finds exactly n, half a space each end
+        values.update(finger=f, space=(length - n * f) / n, surroundingspaces=0.99,
+                      play=self.settings.lock_play)
+        return boxes.edges.FingerJointSettings(self.thickness, relative=False, **values)
+
+    def lockEdge(self, length: float) -> boxes.edges.BaseEdge:
+        """The lower layer's fingers for a back wall run `length` long."""
+        return boxes.edges.FingerJointEdge(self.boxes, self.lockSettings(length))
+
+    def lockHoles(self, x: float, y: float, length: float) -> None:
+        """The back wall's holes for lockEdge(length), along x from (x, y)."""
+        boxes.edges.FingerHoles(self.boxes, self.lockSettings(length))(x, y, length, 0)
 
     def backEdge(self, length: float, runs: list[tuple[float, float]]) -> boxes.edges.BaseEdge | str:
         """The lower layer's back edge: fingers where the back wall has finger holes, plain
@@ -126,7 +152,7 @@ class TrayLid(lids.Lid):
             if start > pos:
                 types.append("e")
                 lengths.append(start - pos)
-            types.append("f")
+            types.append(self.lockEdge(l))
             lengths.append(l)
             pos = start + l
         if pos < length:
@@ -629,7 +655,7 @@ a liner glued to the outer wall (no finger joints).
                 def hwallCB(s=start, e=end, row=y, wl=wall_len) -> None:
                     self.wallLabelsCB(s, e, row)
                     if sliding and row == 0 and wl > 2 * bs:
-                        self.fingerHolesAt(bs, self.h - 0.5 * t, wl - 2 * bs, 0)
+                        self.lid.lockHoles(bs, self.h - 0.5 * t, wl - 2 * bs)
 
                 self.rectangularWall(wall_len, h, [
                     boxes.edges.CompoundEdge(self, edges, lengths),
