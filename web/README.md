@@ -193,8 +193,10 @@ verifying 3D placements for new generators.
   of the wall, if that is less), so a deep setting cannot cut a low wall in two.
 - TrayLayout also has a `sliding` lid style (`TrayLid` in `boxes/generators/traylayout.py`, not
   offered by other generators): the front wall is one thickness lower and the back wall one higher,
-  so a two-layer lid slides in from the front over the lowered wall; the lower layer's tab locks
-  into finger holes in the back wall (following gaps in the back wall). The back wall gets no
+  so a two-layer lid slides in from the front over the lowered wall; the lower layer's fingers lock
+  into finger holes in the back wall (following gaps in the back wall): `Lid_lock_fingers` (2) per
+  back wall piece, spread evenly, in holes `Lid_lock_play` (0.5 mm) larger than the fingers, so the
+  lid goes in and out easily (`TrayLid.lockSettings()`). The back wall gets no
   finger hole notch, it would cut the lock. Optional magnet holes (`Lid_magnet_diameter`) in the lower
   layer sit right behind the front wall in the front corners, for magnets glued to the inside of
   the front wall (top flush with it) to hold the closed lid; holes that do not fit raise an error. Without a handle the top layer gets a grip slot;
@@ -214,12 +216,27 @@ verifying 3D placements for new generators.
   are drawn for 0 mm rows and columns. Removing the outer wall piece behind a liner removes the
   liner there and keeps the outer wall: the 0 mm row folds its two walls into the outer one, so
   the layout's outer line stands for both (by design, see `TrayLayout.lines()`). In Edit mode the first and last compartment can be dragged or typed down to 0.
-- TypeTray and TrayLayout have a "Card ramps (3D print)" group (web only, not in core): a wedge
-  per compartment, leaning against the chosen wall (`ramp_side`) and rising from the floor at
-  `ramp_angle` up to `ramp_height` (capped by the wall height and compartment length), so cards
-  slide up and out. `ramp_height=auto` (the default) ends the ramp at the bottom of the finger
-  hole in that wall (wall height minus the `FingerHoleEdge` depth), so a card on the ramp can be
-  gripped through the hole; walls without a finger hole get 15 mm. TrayLayout compartments along that wall with no wall between them share one
+- TypeTray and TrayLayout have a "Card ramps (3D print)" group (web only, not in core): a ramp
+  per compartment, leaning against the chosen wall (`ramp_side`): a flat top `ramp_flat` (10 mm)
+  long at the wall, then a slope down to the floor at `ramp_angle`, `ramp_height` high (capped by
+  the wall height and compartment length; a short compartment loses the flat top first), so cards
+  slide up and out. On a wall with finger holes, a hook `ramp_hook` (2 mm) thick holds the ramp in
+  place: a flat tongue through each notch, 1 mm above its lowest point (so it does not rest on the
+  wood and uneven walls do not matter), and a lip down the far side of the wall, over the
+  compartment's whole length, to 5 mm below the notch (0.3 mm play to the wall); against a liner
+  the outer wall is right behind it, so only the tongue. With `ramp_double` the two compartments
+  on either side of an inner wall with finger holes (front/back sides only) share one piece
+  instead: a ramp on each side, joined by the tongues, no lip; a compartment left over gets a
+  single ramp. `ramp_ribbed` prints faster: the flat top stays solid (at least `ramp_rib_width`
+  long), the rest is a 1 mm floor plate, and the slope is carried by ribs `ramp_rib_width` (2 mm)
+  thick, one at each side and `ramp_ribs` (2) evenly between (the print clearance spreads them
+  over the narrower width). Tongue, lip, ribs and the second ramp are extra bodies of the same printed part
+  (`Assembly.extra(..., bodies)`, merged into its mesh and STL). `ramp_height=auto` (the default)
+  ends the ramp at the bottom of the finger hole in that wall (wall height minus the
+  `FingerHoleEdge` depth) plus 1 mm and the hook (a set height below that is raised to it when
+  there is a hook; both ramps of a double ramp get the lower height), so a card on the ramp can
+  be gripped through the hole; walls
+  without a finger hole get 15 mm. TrayLayout compartments along that wall with no wall between them share one
   ramp; compartments without a floor or without that wall get none. The ramps are extra parts
   (`Assembly.extra`, helper `printed`, negative `part` index) placed by `placements._card_ramps`:
   shown in 3D and the parts list, included in the STL exports (shortened by the print clearance
@@ -270,12 +287,12 @@ own `tests/`, which upstream's workflow runs. Commands are for the repo root unl
 
 | Suite | What it covers | Command |
 |---|---|---|
-| Unit tests (Vitest, 62) | `layout.ts` (parse, toggle, split, merge, sizes), `zip.ts` (and part names), `bend.ts`, `stl.ts`, the SVG sanitizer, select fallback, the worker client (timeouts per running request, crashes, restarts and failed restarts, latest-wins renders) | `web/`: `npm test` |
+| Unit tests (Vitest, 63) | `layout.ts` (parse, toggle, split, merge, sizes), `zip.ts` (and part names), `bend.ts`, `stl.ts` (also printed parts with extra bodies), the SVG sanitizer, select fallback, the worker client (timeouts per running request, crashes, restarts and failed restarts, latest-wins renders) | `web/`: `npm test` |
 | Typecheck | all of `web/src` | `web/`: `npm run typecheck` (also part of `npm run build`) |
-| Bridge tests (pytest, 30) | `boxes_bridge.py` and the placements: path joining, pieces, `ignore_widths`, composite edge pieces, ramp validation and warnings, argument filtering (option names, non-finite numbers), print clearance, TrayLayout handles, extra parts | `uv run --no-project --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest python -m pytest web/tests/py -q` |
-| Core tests (pytest) | upstream's tests and reference SVGs, plus this fork's `tests/test_traylayout_options.py` (27: notch depth per wall, outer walls per `fingerholes`, liners, size errors, the sliding lid (walls, layers, back wall gaps, handles, magnets, low walls), the lid class hook), `tests/test_typetray.py` (2: `back_height`) and `tests/test_part_counts.py` (11: SpicesRack supports, WineRack walls) | same, plus `--with lxml --with markdown --with setuptools --with pyyaml`, on `tests` (248 passed, 9 skipped). The three fork test files also run in `web.yml` |
+| Bridge tests (pytest, 51) | `boxes_bridge.py` and the placements: path joining, pieces, `ignore_widths`, composite edge pieces, ramp validation and warnings, ramp shape (flat top, hooks, liners, double and ribbed ramps), argument filtering (option names, non-finite numbers), print clearance, TrayLayout handles, extra parts | `uv run --no-project --with affine --with shapely --with qrcode --with typing_extensions --with numpy --with pytest python -m pytest web/tests/py -q` |
+| Core tests (pytest) | upstream's tests and reference SVGs, plus this fork's `tests/test_traylayout_options.py` (31: notch depth per wall, outer walls per `fingerholes`, liners, size errors, the sliding lid (walls, layers, back wall gaps, lock fingers and play, handles, magnets, low walls), the lid class hook), `tests/test_typetray.py` (2: `back_height`) and `tests/test_part_counts.py` (11: SpicesRack supports, WineRack walls) | same, plus `--with lxml --with markdown --with setuptools --with pyyaml`, on `tests` (252 passed, 9 skipped). The three fork test files also run in `web.yml` |
 | Assembly checker | `scripts/check_assembly.py`, see below: all placed generators, defaults plus extra cases | see below (about 10 min) |
-| Browser tests (21) | the built app in Edge or Chrome, see below | `web/`: `npm run test:e2e` |
+| Browser tests (22) | the built app in Edge or Chrome, see below | `web/`: `npm run test:e2e` |
 
 ### Checking placements
 
@@ -327,7 +344,7 @@ renders a bad value on purpose).
 
 Not tested yet:
 
-- No part of this fork has been laser cut or 3D printed yet: not the liners, the sliding lid or
-  the card ramps.
+- A first TrayLayout box with a sliding lid has been cut: the lid's many locking fingers made
+  it hard to slide in and out (now 2 per back wall piece with 0.5 mm play), and the plain wedge
+  ramps got a flat top and a hook. The new lid lock and ramps are not built yet.
 - LightBurn import, browsers other than Edge and Chrome, phone-sized screens.
-- The CI workflow has not run on GitHub yet (nothing is pushed).

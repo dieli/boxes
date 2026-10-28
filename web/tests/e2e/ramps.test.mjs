@@ -36,17 +36,28 @@ test("TrayLayout ramps on the left side", async () => {
   await assertClean(page);
 });
 
-test("ramp height auto: up to the bottom of the finger holes", async () => {
-  // Outside measurement: walls 60 - 3 = 57 mm, finger holes half as deep -> 28.5 mm.
+test("ramp height auto: the bottom of the finger holes plus the hook", async () => {
+  // Outside measurement: walls 60 - 3 = 57 mm, finger holes half as deep -> 28.5 mm, plus
+  // 1 mm lift and the 2 mm hook; a 10 mm flat top before the 45° slope.
   await load(page, "#TypeTray?sx=50*2&sy=50*2&h=60&ramp=1&fingerholes=front&FingerHoleEdge_relative_depth=0.5");
   const ramps = await printedParts(page);
-  assert.ok(ramps.length > 0 && ramps.every((r) => r.size.startsWith("28.5×28.5×")), JSON.stringify(ramps));
-  // A number still sets the height.
+  assert.ok(ramps.length > 0 && ramps.every((r) => r.size.startsWith("41.5×31.5×")), JSON.stringify(ramps));
+  // A number above the notch still sets the height (one at or below it is raised for the hook);
+  // the 45.5 mm compartment shortens the flat top.
   await rerender(page, () => page.$eval("#arg-ramp_height", (e) => {
-    e.value = "20";
+    e.value = "40";
     e.dispatchEvent(new Event("input", { bubbles: true }));
   }));
-  assert.ok((await printedParts(page)).every((r) => r.size.startsWith("20×20×")));
+  const set = await printedParts(page);
+  assert.ok(set.every((r) => r.size.startsWith("45.5×40×")), JSON.stringify(set));
+  await assertClean(page);
+});
+
+test("double ramps: one piece per column across the notched inner wall", async () => {
+  await load(page, "#TypeTray?sx=50*2&sy=50*2&h=60&ramp=1&fingerholes=front&ramp_double=1");
+  const ramps = await printedParts(page);
+  assert.equal(ramps.length, 2, JSON.stringify(ramps));
+  assert.ok(ramps.every((r) => r.name.startsWith("double card ramp")), JSON.stringify(ramps));
   await assertClean(page);
 });
 

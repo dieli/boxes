@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import math
 from types import SimpleNamespace
+from typing import NamedTuple
 from collections.abc import Callable
 
 from assembly import Assembly, BoxFrame, add, X, Y, Z, _polygon_segments, neg, positions
@@ -264,31 +265,68 @@ def type_tray(a: Assembly) -> None:
     lx, ly = len(b.sx), len(b.sy)
     outer = {"front": lambda i, j: j == ly - 1, "back": lambda i, j: j == 0,
              "left": lambda i, j: i == 0, "right": lambda i, j: i == lx - 1}
-    side = (getattr(b, "_web_ramp", None) or {}).get("side", "front")
     hi = b.hi or b.h
-    # Finger holes: inner walls along x always (if any), outer front/back only when chosen.
-    # All notches are drawn with wallheight hi (FingerHoleEdgeSettings in render()).
-    depth = _notch_depth(b, hi) if side in ("front", "back") and b.fingerholes != "none" else 0.0
-
-    def hole(i: int, j: int) -> float:
-        if not depth or not outer[side](i, j):
-            return depth
-        return depth if not b.closedtop and b.fingerholes in (side, "front-and-back") else 0.0
-
     # The core raises the back wall by back_height only with top_edge "e".
     bh = b.back_height if b.top_edge == "e" else 0.0
 
-    def wall(i: int, j: int) -> float:
-        if not outer[side](i, j):
-            return hi
-        return b.h + (bh if side == "back" else 0.0)
+    def cells(side: str) -> list[RampCell]:
+        # Finger holes: inner walls along x always (if any), outer front/back only when chosen.
+        # All notches are drawn with wallheight hi (FingerHoleEdgeSettings in render()).
+        depth = _notch_depth(b, hi) if side in ("front", "back") and b.fingerholes != "none" else 0.0
 
-    _card_ramps(a, [(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j], wall(i, j), hole(i, j))
-                    for j in range(ly) for i in range(lx)], _ramp_limit(b, b.h))
+        def hole(i: int, j: int) -> float:
+            if not depth or not outer[side](i, j):
+                return depth
+            return depth if not b.closedtop and b.fingerholes in (side, "front-and-back") else 0.0
+
+        def wall(i: int, j: int) -> float:
+            if not outer[side](i, j):
+                return hi
+            return b.h + (bh if side == "back" else 0.0)
+
+        line = {"front": lambda j: j + 1, "back": lambda j: j}.get(side, lambda j: -1)
+        return [RampCell(cx[i], cx[i] + b.sx[i], cy[j] - b.sy[j], cy[j], wall(i, j), hole(i, j),
+                         ((cx[i] + b.sx[i] / 2, b.sx[i]),), row=j, line=line(j))
+                for j in range(ly) for i in range(lx)]
+
+    _card_ramps(a, cells, _ramp_limit(b, b.h))
 
 
 #: Ramp height for "auto" at walls without a finger hole (the former default).
 RAMP_HEIGHT_NO_HOLE = 15.0
+#: Room in mm between a ramp's hook and the wall it reaches through (notch and far side).
+RAMP_HOOK_PLAY = 0.3
+#: Height in mm of the hook's flat bottom above the lowest point of the finger hole: it does
+#: not rest on the wood, so uneven walls do not matter.
+RAMP_HOOK_LIFT = 1.0
+#: How far in mm the hook's lip reaches below the bottom of the finger hole.
+RAMP_LIP_BELOW = 5.0
+#: Thickness in mm of a ribbed ramp's floor plate.
+RAMP_BASE = 1.0
+#: The wall on the other side of a compartment (double ramps pair across it).
+OPPOSITE = {"front": "back", "back": "front"}
+
+
+class RampCell(NamedTuple):
+    """A compartment, or a run of them sharing one ramp, for _card_ramps."""
+    x0: float
+    x1: float
+    y0: float
+    y1: float
+    wall: float  # height of the wall the ramp leans against
+    hole: float = 0.0  # depth of its finger hole notches; 0 without
+    notches: tuple = ()  # (centre, length) along x of each compartment's notch in that wall
+    through: bool = True  # free space behind the wall (not a liner against the outer wall)
+    row: int = -1  # front/back ramps: the compartment's row (from the back)
+    line: int = -1  # ... and the wall line it leans against (0: the back wall)
+
+
+def _notch_shape(box, length: float, depth: float) -> tuple[float, float]:
+    """Width and corner radius of the FingerHoleEdge notch in a compartment `length` long
+    (see typetray.FingerHoleEdge)."""
+    s = box.edges["A"].settings
+    width = min(s.absolute_width + length * s.relative_width, length)
+    return width, min(width / 2, depth, s.radius)
 
 
 def _notch_depth(box, wallheight: float) -> float:
@@ -315,36 +353,188 @@ def _ramp_limit(box, h: float) -> float:
     return math.inf
 
 
-def _card_ramps(a: Assembly, cells: list[tuple[float, float, float, float, float, float]],
-                limit: float = math.inf) -> None:
-    """Printed wedges so cards slide up and out, when the user turned them on (box._web_ramp:
-    side, height, angle; see boxes_bridge). cells: (x0, x1, y0, y1, wall height, finger hole
-    depth or 0) of each compartment with a floor and a wall on the ramp side. A ramp fills the
-    compartment's width, leans against that wall and rises from the floor at the given angle,
-    no higher than the wall and limit (see _ramp_limit). Height None ("auto"): up to the
-    bottom of the wall's finger hole, so a card lying on the ramp can be gripped through it."""
+def _card_ramps(a: Assembly, cells: Callable[[str], list[RampCell]], limit: float = math.inf) -> None:
+    """Printed ramps so cards slide up and out, when the user turned them on (box._web_ramp:
+    side, height, angle, flat, hook, double; see boxes_bridge). cells(side): compartments (or
+    runs of them) with a floor and a wall on that side. A ramp fills the compartment's width
+    and leans against that wall: a flat top `flat` long at the wall, then a slope down to the
+    floor at the given angle, no higher than the wall and limit (see _ramp_limit). Height
+    None ("auto"): at walls with finger holes the bottom of the hole (plus lift and hook with
+    a hook), else RAMP_HEIGHT_NO_HOLE. A set height lower than that is raised to it when there
+    is a hook.
+
+    With hook > 0, the top reaches through each finger hole of the wall as a tongue `hook`
+    thick (flat, RAMP_HOOK_LIFT above the hole's bottom), and a lip as thick hangs down on the
+    far side over the compartment's length so the ramp stays in place; a liner has the outer
+    wall behind it and gets the tongue only. With double, the compartments on either side of
+    an inner wall with finger holes share one piece instead: a ramp on each side, joined by
+    the tongues (see _pair_ramps). Tongue, lip and the second ramp are extra bodies of the same
+    printed part (see Assembly.extra)."""
     r = getattr(a.box, "_web_ramp", None)
     if not r:
         return
     side = r["side"]
+    t = a.t
+    g = RAMP_HOOK_PLAY
     tan = math.tan(math.radians(min(max(r["angle"], 5.0), 85.0)))
-    for k, (x0, x1, y0, y1, wall, hole_depth) in enumerate(cells, 1):
-        along_y = side in ("front", "back")
-        depth, width = (y1 - y0, x1 - x0) if along_y else (x1 - x0, y1 - y0)
-        height = r["height"]
-        if height is None:
-            height = wall - hole_depth if hole_depth > 0 else RAMP_HEIGHT_NO_HOLE
-        h = min(height, wall, limit)
-        length = h / tan
-        if length > depth:
-            length, h = depth, depth * tan
+    along_y = side in ("front", "back")
+    singles, pairs = cells(side), []
+    if r.get("double") and along_y:
+        singles, pairs = _pair_ramps(singles, cells(OPPOSITE[side]), side)
+
+    def size(c: RampCell) -> tuple[float, float]:
+        """Depth (away from the wall) and width of the cell's ramp."""
+        return (c.y1 - c.y0, c.x1 - c.x0) if along_y else (c.x1 - c.x0, c.y1 - c.y0)
+
+    def frame(c: RampCell):
+        # Local x runs from the wall into the compartment, y up; extruded across the width.
+        return {"front": ((c.x0, c.y0, 0.0), Y, X), "back": ((c.x1, c.y1, 0.0), neg(Y), neg(X)),
+                "left": ((c.x0, c.y1, 0.0), X, neg(Y)), "right": ((c.x1, c.y0, 0.0), neg(X), Y)}[side]
+
+    def hooks(c: RampCell, origin, n, h: float, hook: float, mode: str) -> list[dict]:
+        return [b for centre, length in c.notches
+                for b in _ramp_hook(a.box, (centre - origin[0]) * n[0], length, c, h, hook, t, mode)]
+
+    for k, c in enumerate(singles, 1):
+        depth, width = size(c)
+        hook = r.get("hook", 0.0) if along_y and c.hole > 0 and c.notches else 0.0
+        flat, slope, h = _ramp_shape(r, c, depth, hook, limit, tan)
         if h < 0.1 or width < 0.1:
             continue
-        # Local x runs from the wall into the compartment, y up; extruded across the width.
-        origin, u, n = {"front": ((x0, y0, 0.0), Y, X), "back": ((x1, y1, 0.0), neg(Y), neg(X)),
-                        "left": ((x0, y1, 0.0), X, neg(Y)), "right": ((x1, y0, 0.0), neg(X), Y)}[side]
-        a.place(a.extra(f"card ramp {k}", [(0.0, 0.0), (length, 0.0), (0.0, h)]),
-                origin, u, Z, n, thickness=width)
+        origin, u, n = frame(c)
+        outline, bodies = _ramp_solid(r, flat, slope, h, width)
+        if hook > 0:
+            bodies += hooks(c, origin, n, h, hook, "lip" if c.through else "liner")
+        a.place(a.extra(f"card ramp {k}", outline, bodies), origin, u, Z, n, thickness=width)
+
+    for k, (c, d) in enumerate(pairs, 1):
+        (dc, width), (dd, _) = size(c), size(d)
+        hook = r.get("hook", 0.0)
+        # Both sides as high as the lower one (a short compartment can lower its ramp).
+        h = min(_ramp_shape(r, c, dc, hook, limit, tan)[2], _ramp_shape(r, d, dd, hook, limit, tan)[2])
+        h = min(_ramp_shape(r, c, dc, hook, limit, tan, h)[2], _ramp_shape(r, d, dd, hook, limit, tan, h)[2])
+        if h < 0.1 or width < 0.1:
+            continue
+        origin, u, n = frame(c)
+        outline, bodies = _ramp_solid(r, *_ramp_shape(r, c, dc, hook, limit, tan, h), width)
+        # The second ramp, mirrored beyond the wall (with play), across the same width.
+        other, ribs = _ramp_solid(r, *_ramp_shape(r, d, dd, hook, limit, tan, h), width,
+                                  lambda x: -(t + g) - x)
+        bodies += [{"outline": other, "origin": (0.0, 0.0, 0.0), "ux": X, "uy": Y, "n": Z,
+                    "t": width, "across": True}] + ribs
+        bodies += hooks(c, origin, n, h, hook, "double")
+        a.place(a.extra(f"double card ramp {k}", outline, bodies), origin, u, Z, n, thickness=width)
+
+
+def _ramp_shape(r: dict, c: RampCell, depth: float, hook: float, limit: float, tan: float,
+                h: float | None = None) -> tuple[float, float, float]:
+    """(flat top, slope length, height) of a ramp in cell c, `depth` long from the wall; h
+    fixes the height (else from r, see _card_ramps). A compartment too short for flat top and
+    slope loses flat top first, then height."""
+    if h is None:
+        bottom = c.wall - c.hole
+        lift = RAMP_HOOK_LIFT + hook if hook > 0 else 0.0
+        height = r["height"]
+        if height is None:
+            height = bottom + lift if c.hole > 0 else RAMP_HEIGHT_NO_HOLE
+        elif hook > 0:  # a set height at (or below) the notch's bottom: room for the tongue
+            height = max(height, bottom + lift)
+        h = min(height, c.wall, limit)
+    flat = min(r.get("flat", 0.0), depth)
+    slope = h / tan
+    if flat + slope > depth:
+        flat = max(depth - slope, 0.0)
+        if slope > depth:
+            slope, h = depth, depth * tan
+    return flat, slope, h
+
+
+def _ramp_solid(r: dict, flat: float, slope: float, h: float, width: float,
+                mirror: Callable[[float], float] = lambda x: x) -> tuple[list, list[dict]]:
+    """A ramp as its outline (extruded over the whole width) and rib bodies. Solid: the
+    outline alone. Ribbed (r["ribbed"]), so it prints faster: the flat top stays solid (at
+    least a rib's width), the rest is a floor plate RAMP_BASE thick, and the slope is carried
+    by ribs r["rib_width"] thick, one at each side and r["ribs"] evenly between them. mirror
+    maps local x (the second ramp of a double ramp)."""
+    full = [(mirror(x), y) for x, y in _ramp_outline(flat, slope, h)]
+    rw, n = r.get("rib_width", 0.0), int(r.get("ribs", 0))
+    end = flat + slope
+    wall = max(flat, rw)  # the solid block at the wall
+    base = end - RAMP_BASE * slope / h if h > 0 else 0.0  # where the slope is RAMP_BASE high
+    if not r.get("ribbed") or h <= RAMP_BASE + 0.5 or wall >= base - 0.5 or width < 2 * rw + 0.5:
+        return full, []
+    top = h if wall <= flat else h * (end - wall) / slope
+    pts = [(0.0, 0.0), (end, 0.0), (base, RAMP_BASE), (wall, RAMP_BASE), (wall, top)]
+    pts += [(flat, h)] if flat < wall and flat > 1e-6 else []
+    pts += [(0.0, h)]
+    ribs = [{"outline": full, "origin": (0.0, 0.0, (width - rw) * k / (n + 1)),
+             "ux": X, "uy": Y, "n": Z, "t": rw, "spread": True} for k in range(n + 2)]
+    return [(mirror(x), y) for x, y in pts], ribs
+
+
+def _ramp_outline(flat: float, slope: float, h: float) -> list[tuple[float, float]]:
+    """Side view of a ramp: x from the wall, y up."""
+    if flat > 1e-6:
+        return [(0.0, 0.0), (flat + slope, 0.0), (flat, h), (0.0, h)]
+    return [(0.0, 0.0), (slope, 0.0), (0.0, h)]
+
+
+def _pair_ramps(own: list[RampCell], other: list[RampCell],
+                side: str) -> tuple[list[RampCell], list[tuple[RampCell, RampCell]]]:
+    """Double ramps: pairs (c, d) of a cell c leaning on an inner wall with finger holes and
+    the cell d on its far side leaning on the same wall (same columns), taken from the back
+    for side "front" (from the front for "back"), each compartment once. Returns the cells
+    of `own` in no pair (single ramps) and the pairs."""
+    def fits(c: RampCell) -> bool:
+        return c.hole > 0 and bool(c.notches) and c.through and c.line >= 0
+
+    used: dict[int, list[tuple[float, float]]] = {}
+
+    def free(c: RampCell) -> bool:
+        return all(min(c.x1, x1) - max(c.x0, x0) < 0.1 for x0, x1 in used.get(c.row, []))
+
+    pairs = []
+    for c in sorted(own, key=lambda c: c.line if side == "front" else -c.line):
+        if not fits(c) or not free(c):
+            continue
+        d = next((d for d in other if d.line == c.line and d.row != c.row and fits(d) and free(d)
+                  and abs(d.x0 - c.x0) < 0.1 and abs(d.x1 - c.x1) < 0.1), None)
+        if d is None:
+            continue
+        pairs.append((c, d))
+        for e in (c, d):
+            used.setdefault(e.row, []).append((e.x0, e.x1))
+    return [c for c in own if free(c)], pairs
+
+
+def _ramp_hook(box, s: float, length: float, c: RampCell, h: float, hook: float,
+               t: float, mode: str) -> list[dict]:
+    """Bodies through the notch centred at s across a ramp h high (local z), in a compartment
+    `length` long: a flat tongue from RAMP_HOOK_LIFT above the notch's bottom up to the ramp's
+    top, as wide as the notch is there (less the play), through the wall. mode "lip": and a
+    lip `hook` thick down the far side, over the compartment's length; "liner": the tongue
+    only, up to the outer wall behind the liner; "double": the tongue only, into the second
+    ramp. Empty if the ramp ends too low to reach into the notch."""
+    g = RAMP_HOOK_PLAY
+    ov = 0.5  # overlap with the neighbouring body, so the slicer merges them
+    bottom = c.wall - c.hole
+    w, rr = _notch_shape(box, length, c.hole)
+    z = min(RAMP_HOOK_LIFT, rr)
+    half = (w - 2 * rr) / 2 + math.sqrt(max(rr * rr - (rr - z) ** 2, 0.0)) - g
+    low = bottom + RAMP_HOOK_LIFT
+    if half < 0.5 or h - low < 0.5:
+        return []
+    # Body frames in the ramp's local coordinates: outline (across, up), extruded into the wall.
+    frame = {"ux": (0.0, 0.0, 1.0), "uy": (0.0, 1.0, 0.0), "n": (-1.0, 0.0, 0.0)}
+    reach = {"lip": t + g, "liner": t - g, "double": t + g + ov}[mode]
+    bodies = [{**frame, "outline": [(s - half, low), (s + half, low), (s + half, h), (s - half, h)],
+               "origin": (ov, 0.0, 0.0), "t": ov + reach}]
+    if mode == "lip":
+        a_, b_ = s - length / 2 + g, s + length / 2 - g
+        foot = max(bottom - RAMP_LIP_BELOW, 0.0)
+        bodies.append({**frame, "outline": [(a_, foot), (b_, foot), (b_, h), (a_, h)],
+                       "origin": (ov - reach, 0.0, 0.0), "t": ov + hook})
+    return bodies
 
 
 # --- Card and dice boxes --------------------------------------------------------------
@@ -1664,7 +1854,7 @@ def _tray_layout(a: Assembly, editable: bool) -> None:
     inner = (any(any(row) for row in b.hwalls[1:ly]) or any(any(row[1:lx]) for row in b.vwalls)
              or any(any(v) for v in getattr(b, "liner", {}).values()))
     place_lids(a, f, None, inner=(b.hi or b.h) if inner else None)
-    _card_ramps(a, _tray_ramp_cells(b, xs, ys), _ramp_limit(b, b.h))
+    _card_ramps(a, lambda side: _tray_ramp_cells(b, xs, ys, side), _ramp_limit(b, b.h))
     if not editable:
         return
     f.dims(h="h")
@@ -1715,12 +1905,9 @@ def _tray_layout(a: Assembly, editable: bool) -> None:
             a.handle("vwall", line, ri(j), given.vwalls[ri(j)][line], (x0, ys[j + 1] + t, 0.0), (x0 + t, ys[j], b.hi))
 
 
-def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
+def _tray_ramp_cells(b, xs: list[float], ys: list[float], side: str) -> list[RampCell]:
     """Ramp cells (see _card_ramps) of a TrayLayout grid: compartments with a floor and a wall on
-    the ramp side; neighbours along that wall with no wall between them share one ramp."""
-    r = getattr(b, "_web_ramp", None)
-    if not r:
-        return []
+    that side; neighbours along that wall with no wall between them share one ramp."""
     t = b.thickness
     lx, ly = len(b.x), len(b.y)
     hi = b.hi or b.h
@@ -1739,19 +1926,19 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
 
     def run(first, last) -> tuple[float, float, float, float]:
         a, b_ = cell(*first), cell(*last)
-        if r["side"] in ("front", "back"):  # along x: shared y range
+        if side in ("front", "back"):  # along x: shared y range
             return a[0], b_[1], max(a[2], b_[2]), min(a[3], b_[3])
         return max(a[0], b_[0]), min(a[1], b_[1]), b_[2], a[3]
 
     cells = []
-    if r["side"] in ("front", "back"):
-        line = (lambda j: j + 1) if r["side"] == "front" else (lambda j: j)
+    if side in ("front", "back"):
+        line = (lambda j: j + 1) if side == "front" else (lambda j: j)
         for j in range(ly):
             ok = [b.floors[j][i] and b.hwalls[line(j)][i] for i in range(lx)]
             outer = line(j) in (0, ly)
 
-            def wall_hole(i: int) -> tuple[float, float]:
-                if outer and not has(r["side"], i):
+            def wall_hole(i: int) -> tuple[float, float, bool]:
+                if outer and not has(side, i):
                     # The sliding lid raises the back wall and lowers the front wall by t.
                     wall = b.h + (0.0 if not sliding else t if line(j) == 0 else -t)
                     notch = min(wall, hi)
@@ -1761,7 +1948,11 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                     # and a liner is notched like them (see TrayLayout.liners).
                     wall = notch = hi
                     notched = b.hasFingerHoles(line(j)) if not outer else b.fingerholes != "none"
-                return wall, (_notch_depth(b, notch) if notched else 0.0)
+                return wall, (_notch_depth(b, notch) if notched else 0.0), not outer
+
+            def notches(i: int, e: int) -> tuple:
+                """(centre, length) of the columns i .. e - 1 along x: one notch each."""
+                return tuple(((xs[k] + t + xs[k + 1]) / 2, xs[k + 1] - xs[k] - t) for k in range(i, e))
 
             i = 0
             while i < lx:
@@ -1771,10 +1962,13 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                 e = i + 1
                 while e < lx and ok[e] and not b.vwalls[j][e] and cell(e, j)[2:] == cell(i, j)[2:]:
                     e += 1
-                cells.append((*run((i, j), (e - 1, j)), *wall_hole(i)))
+                wall, hole, inner = wall_hole(i)
+                # Behind an outer wall is outside the box; behind a liner the outer wall.
+                cells.append(RampCell(*run((i, j), (e - 1, j)), wall, hole, notches(i, e),
+                                      inner or not has(side, i), row=j, line=line(j)))
                 i = e
     else:
-        line = (lambda i: i) if r["side"] == "left" else (lambda i: i + 1)
+        line = (lambda i: i) if side == "left" else (lambda i: i + 1)
         for i in range(lx):
             ok = [b.floors[j][i] and b.vwalls[j][line(i)] for j in range(ly)]
             outer = line(i) in (0, lx)
@@ -1787,8 +1981,8 @@ def _tray_ramp_cells(b, xs: list[float], ys: list[float]) -> list[tuple]:
                 e = j + 1
                 while e < ly and ok[e] and not b.hwalls[e][i] and cell(i, e)[:2] == cell(i, j)[:2]:
                     e += 1
-                wall = b.h if outer and not has(r["side"], j) else hi
-                cells.append((*run((i, j), (i, e - 1)), wall, 0.0))
+                wall = b.h if outer and not has(side, j) else hi
+                cells.append(RampCell(*run((i, j), (i, e - 1)), wall))
                 j = e
     return cells
 

@@ -126,7 +126,9 @@ def _arg_schema(a: argparse.Action, prefix: str | None) -> dict | None:
 # Card ramps: printed wedges in the compartments so cards slide up and out. They are not
 # cut, so they only show in the 3D view and the STL exports (see placements._card_ramps).
 _RAMP_GENERATORS = {"TypeTray", "TrayLayout"}
-_RAMP_DEFAULTS = {"ramp": "0", "ramp_side": "front", "ramp_height": "auto", "ramp_angle": "45"}
+_RAMP_DEFAULTS = {"ramp": "0", "ramp_side": "front", "ramp_height": "auto", "ramp_angle": "45",
+                  "ramp_flat": "10", "ramp_hook": "2", "ramp_double": "0",
+                  "ramp_ribbed": "0", "ramp_ribs": "2", "ramp_rib_width": "2"}
 _RAMP_GROUP = {"title": "Card ramps (3D print)", "collapsed": True, "args": [
     {"name": "ramp", "label": "ramp", "kind": "bool", "default": False,
      "help": "add a 3D printed ramp to every compartment so cards slide up and out "
@@ -135,10 +137,27 @@ _RAMP_GROUP = {"title": "Card ramps (3D print)", "collapsed": True, "args": [
      "options": [[s, s] for s in ("front", "back", "left", "right")],
      "help": "wall the ramps lean against"},
     {"name": "ramp_height", "label": "height", "kind": "text", "default": "auto",
-     "help": "height at the wall in mm (at most the wall height); auto: up to the bottom of the "
-             "finger hole in that wall, 15 mm for walls without finger holes"},
+     "help": "height at the wall in mm (at most the wall height); auto: the bottom of the "
+             "finger hole in that wall plus the hook, 15 mm for walls without finger holes. "
+             "With a hook, at least the bottom of the finger hole plus the hook"},
     {"name": "ramp_angle", "label": "angle", "kind": "text", "default": "45",
      "help": "slope in degrees from the floor (the ramp gets shorter if the compartment is too short)"},
+    {"name": "ramp_flat", "label": "flat top", "kind": "text", "default": "10",
+     "help": "length in mm of the flat top at the wall, before the slope (0: a plain wedge)"},
+    {"name": "ramp_hook", "label": "hook", "kind": "text", "default": "2",
+     "help": "thickness in mm of the hook that reaches through the finger hole and down the far "
+             "side of the wall, so the ramp stays in place (0: no hook); only at walls with finger "
+             "holes"},
+    {"name": "ramp_double", "label": "double", "kind": "bool", "default": False,
+     "help": "one piece for the two compartments on either side of an inner wall with finger "
+             "holes: a ramp on each side, joined through the holes (front and back sides only)"},
+    {"name": "ramp_ribbed", "label": "ribbed", "kind": "bool", "default": False,
+     "help": "prints faster: only a 1 mm floor plate and ribs under the slope (one at each side "
+             "plus the ribs below); the flat top stays solid"},
+    {"name": "ramp_ribs", "label": "ribs", "kind": "text", "default": "2",
+     "help": "ribbed ramps: number of ribs between the two at the sides (0 or more)"},
+    {"name": "ramp_rib_width", "label": "rib width", "kind": "text", "default": "2",
+     "help": "ribbed ramps: width of each rib in mm"},
 ]}
 
 
@@ -149,8 +168,9 @@ def _ramp_settings(args: dict) -> dict | None:
         return None
     if r["ramp_side"] not in ("front", "back", "left", "right"):
         raise ValueError(f"ramp_side: unknown side {r['ramp_side']!r}")
-    out: dict = {"side": r["ramp_side"]}
-    for k in ("height", "angle"):
+    out: dict = {"side": r["ramp_side"], "double": boxes.boolarg(r["ramp_double"]),
+                 "ribbed": boxes.boolarg(r["ramp_ribbed"])}
+    for k in ("height", "angle", "flat", "hook", "ribs", "rib_width"):
         if k == "height" and r["ramp_height"].strip().lower() == "auto":
             out[k] = None  # placements._card_ramps: the finger hole's bottom
             continue
@@ -158,9 +178,12 @@ def _ramp_settings(args: dict) -> dict | None:
             v = float(r["ramp_" + k])
         except ValueError:
             raise ValueError(f"ramp_{k}: {r['ramp_' + k]!r} is not a number") from None
-        if not math.isfinite(v) or v <= 0 or (k == "angle" and v >= 90):
-            limits = "between 0 and 90" if k == "angle" else "more than 0"
+        zero = k in ("flat", "hook", "ribs")  # 0 turns them off (no ribs between)
+        if not math.isfinite(v) or v < 0 or (v == 0 and not zero) or (k == "angle" and v >= 90):
+            limits = "between 0 and 90" if k == "angle" else "0 or more" if zero else "more than 0"
             raise ValueError(f"ramp_{k}: {r['ramp_' + k]!r} must be a number {limits}")
+        if k == "ribs" and v != int(v):
+            raise ValueError(f"ramp_ribs: {r['ramp_ribs']!r} must be a whole number")
         out[k] = v
     return out
 
@@ -955,7 +978,16 @@ def print_parts(name: str, args_json: str, clearance: float = 0.0) -> str:
                 if place.get("t"):
                     d = min(clearance, place["t"] - 0.1) / 2
                     place["origin"] = [o + n * d for o, n in zip(place["origin"], place["n"])]
+                    width = place["t"]
                     place["t"] -= 2 * d
+                    for body in p.get("bodies", []):
+                        if body.get("across"):  # a second ramp: the same play
+                            body["t"] -= 2 * d
+                        elif body.get("spread"):  # ribs: spread over the narrower width
+                            if width > body["t"]:
+                                body["origin"][2] *= (place["t"] - body["t"]) / (width - body["t"])
+                        else:  # hooks stay where they were
+                            body["origin"][2] -= d
             elif p["outline"]:
                 p["outline"] = _inset(p["outline"], clearance / 2)
     return json.dumps({"parts": result["parts"], "thickness": result["thickness"]})

@@ -154,9 +154,13 @@ class Assembly:
         self.lines: list[dict] = []
         self.extras: list[Part] = []
 
-    def extra(self, label: str, outline: list[tuple[float, float]]) -> Part:
+    def extra(self, label: str, outline: list[tuple[float, float]],
+              bodies: list[dict] | None = None) -> Part:
         """A part that is not in the 2D sheet (e.g. a 3D printed insert) with the given outline
-        in local coordinates. Place it like any other part; give the extrusion as thickness."""
+        in local coordinates. Place it like any other part; give the extrusion as thickness.
+        bodies: more extrusions that belong to the same printed piece, each as {"outline",
+        "origin", "ux", "uy", "n", "t"} with its frame in the part's local coordinates
+        (x, y as the outline, z along the extrusion)."""
         outline = [(float(p[0]), float(p[1])) for p in outline]
         if outline and outline[0] != outline[-1]:
             outline.append(outline[0])
@@ -165,6 +169,10 @@ class Assembly:
                "x": max(xs) - min(xs), "y": max(ys) - min(ys),
                "edges": [], "label": label, "move": "", "matrix": [0.0] * 6, "mirrored": False,
                "callers": [], "outline": {"outer": [list(p) for p in outline], "holes": []}}
+        if bodies:
+            rec["bodies"] = [{**b, "outline": [[float(x), float(y)] for x, y in b["outline"]],
+                              "origin": [float(v) for v in b["origin"]], "t": float(b["t"])}
+                             for b in bodies]
         part = Part(len(self.parts) + len(self.extras), rec)
         self.extras.append(part)
         return part

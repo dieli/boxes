@@ -84,3 +84,25 @@ describe("partStl / partsZip", () => {
     expect(partsZip([{ ...square(10, null), outline: null }], ["x"], 3)).toBeNull();
   });
 });
+
+describe("printed parts with extra bodies", () => {
+  test("the bodies join the part's STL in its local frame", () => {
+    // A 10 mm cube with a 2 x 2 x 4 mm peg sticking out of its x = 0 face (extruded along -x).
+    const part: RecordedPart = {
+      ...square(10, null, -1), helper: "printed",
+      bodies: [{ outline: [[4, 4], [6, 4], [6, 6], [4, 6]], origin: [0, 0, 0], ux: [0, 0, 1], uy: [0, 1, 0], n: [-1, 0, 0], t: 4 }],
+    };
+    const tris = triangles(partStl(part, 10)!);
+    expect(tris.length).toBe(24);
+    const xs = tris.flatMap((t) => t.p.map((p) => p.x));
+    expect(Math.min(...xs)).toBeCloseTo(-4);
+    expect(Math.max(...xs)).toBeCloseTo(10);
+    const peg = tris.filter((t) => t.p.every((p) => p.x < -1e-6 || Math.abs(p.x) < 1e-6) && t.p.some((p) => p.x < -1e-6));
+    for (const t of peg) for (const p of t.p) {
+      expect(p.y).toBeGreaterThanOrEqual(4 - 1e-6);
+      expect(p.y).toBeLessThanOrEqual(6 + 1e-6);
+      expect(p.z).toBeGreaterThanOrEqual(4 - 1e-6);
+      expect(p.z).toBeLessThanOrEqual(6 + 1e-6);
+    }
+  });
+});

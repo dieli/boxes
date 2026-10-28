@@ -64,6 +64,8 @@ export interface RecordedPart {
   /** Functions between render() and the helper, innermost first, e.g. ["Lid.__call__"]. */
   callers: string[];
   outline: { outer: Point2[]; holes: Point2[][] } | null;
+  /** Printed parts: more extrusions of the same piece (e.g. a card ramp's hook), each with its frame in the part's local coordinates. */
+  bodies?: Body[];
   /** Width and height of the cut piece (outline bounds without the burn); null without outline. */
   size: [number, number] | null;
   /** Where the part goes in the 3D assembly; null if it is shown in 2D only. */
@@ -71,6 +73,18 @@ export interface RecordedPart {
 }
 
 export type Vec3 = [number, number, number];
+
+/** An extra extrusion of a printed part: outline in its own plane (origin, ux, uy), extruded t along n. */
+export interface Body {
+  outline: Point2[];
+  origin: Vec3;
+  ux: Vec3;
+  uy: Vec3;
+  n: Vec3;
+  t: number;
+  /** Across the part (the second ramp of a double ramp): the print clearance shrinks it like the part. */
+  across?: boolean;
+}
 
 /**
  * A bend of a flex part: from local x = x0 it follows an arc of radius r (at its face z = 0)

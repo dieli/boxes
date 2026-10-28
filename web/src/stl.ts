@@ -1,6 +1,7 @@
 // STL export for 3D printing: parts extruded by the material thickness, either as one
 // assembled model or each part lying flat on the print bed (a ZIP of one STL per part).
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { bendGeometry } from "./bend";
 import type { Placement, RecordedPart, Vec3 } from "./protocol";
 import { safeName } from "./names";
@@ -67,7 +68,16 @@ export function buildPartGeometry(part: RecordedPart, p: Placement | null, thick
   const flat = new THREE.ExtrudeGeometry(shape, { depth: p?.t ?? thickness, bevelEnabled: false, curveSegments: 1 });
   const geometry = p?.bend?.length ? bendGeometry(flat, p.bend) : flat;
   if (geometry !== flat) flat.dispose();
-  return geometry;
+  if (!part.bodies?.length) return geometry;
+  // One piece: the extra bodies overlap it a little, so slicers merge them.
+  const pieces = [geometry, ...part.bodies.map((b) => {
+    const g = new THREE.ExtrudeGeometry(new THREE.Shape(b.outline.map(([x, y]) => new THREE.Vector2(x, y))),
+      { depth: b.t, bevelEnabled: false, curveSegments: 1 });
+    return g.applyMatrix4(basis(b.origin, b.ux, b.uy, b.n));
+  })];
+  const merged = mergeGeometries(pieces);
+  for (const g of pieces) g.dispose();
+  return merged;
 }
 
 /**
